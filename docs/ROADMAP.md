@@ -2,14 +2,15 @@
 
 The complete feature scope and phase definitions live in [FEATURE_PLAN.md](FEATURE_PLAN.md). This roadmap translates those product phases into delivery milestones.
 
-## Phase 0: Discovery and product validation
-- Audit repository and confirm stack.
-- Inspect the complete 170 Protocol Manual and create a verified inventory.
-- Verify current official Google image and video APIs.
-- Produce capability matrix, cost and quota assumptions, architecture recommendation, and risk assessment.
-- Approve MVP scope and acceptance tests.
+## Phase 0: Discovery and product validation — **Status: Verified (2026-11-19)**
+- [x] Audit repository and confirm stack (`docs/PHASE_0_AUDIT_AND_INTEGRATION.md`, `D010`).
+- [x] Inspect and reconcile the 170 Protocol framework into a data-driven versioned registry (`data/protocols_170.json`, `docs/PROTOCOL_COVERAGE.md`, `D016`).
+- [x] Inspect `zakshub/studio` and `zakshub/designer` actual files and produce integration & contradiction assessment (`docs/PHASE_0_AUDIT_AND_INTEGRATION.md`, `D012`, `D014`).
+- [x] Verify current official Google image (`gemini-nano-banana-2.1`) and video (`gemini-omni-1.2-flash` / Enterprise `veo-3.1-generate-001`) APIs and document Imagen/Veo-preview shutdowns (`D011`).
+- [x] Produce capability matrix, cost/spend guard model (`$0.00` default cap, `D013`), architecture recommendation, threat model, and Interface Evolution Roadmap (`docs/INTERFACE_EVOLUTION_ROADMAP.md`, `D015`).
 
-Exit gate: source manual inventory is traceable, provider capabilities are verified, and architecture decisions are documented.
+Exit gate: source manual summary inventory is traceable (`170/170` IDs), provider capabilities are verified against official Nov 2026 Google documentation, and architecture/security decisions are documented.
+
 
 ## Phase 1: MVP foundation
 - Single user authentication and settings.

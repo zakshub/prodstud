@@ -1,0 +1,39 @@
+# Secrets & environment files (NEVER commit to public repo)
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+master.key
+
+# Local runtime data, private media & SQLite databases
+.prodstud_data/
+data/runtime/
+*.sqlite
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+npm-debug.log*
+
+# QA screenshots / temp
+.qa_artifacts/
+*.tmp
+.DS_Store
