@@ -91,6 +91,8 @@ class ImageProviderAdapter(ABC):
         api_key: str | None,
         idempotency_key: str,
         previous_provider_job_id: str | None = None,
+        variation_index: int = 1,
+        variation_total: int = 1,
     ) -> ProviderSubmissionResult:
         ...
 

@@ -74,12 +74,28 @@ def build_parser() -> argparse.ArgumentParser:
     plan_p.add_argument("--provider", default=None)
     plan_p.add_argument("--model", default=None)
 
-    gen_p = sub.add_parser("generate", help="Request quote and explicitly approve generation")
+    gen_p = sub.add_parser("generate", help="Request quote and explicitly approve generation (supports 1–4 image variations)")
     gen_p.add_argument("--email", required=True)
     gen_p.add_argument("--plan-id", required=True)
     gen_p.add_argument("--provider", default=None)
     gen_p.add_argument("--model", default=None)
+    gen_p.add_argument("--variations", type=int, default=1, help="Number of image variations (1–4)")
     gen_p.add_argument("--approve", action="store_true", help="Explicitly confirm execution after inspecting quote")
+
+    batch_p = sub.add_parser("batch", help="Quote and optionally execute a multi-plan batch with combined cost approval")
+    batch_p.add_argument("--email", required=True)
+    batch_p.add_argument("--project-id", required=True)
+    batch_p.add_argument("--plan-ids", required=True, help="Comma-separated list of plan IDs")
+    batch_p.add_argument("--variations", type=int, default=1, help="Variations per image plan (1–4)")
+    batch_p.add_argument("--approve", action="store_true", help="Explicitly approve combined batch cost and execute")
+
+    ext_p = sub.add_parser("extend", help="Create a multi-turn video extension plan (+3–10s, up to 30s total)")
+    ext_p.add_argument("--email", required=True)
+    ext_p.add_argument("--asset-id", required=True)
+    ext_p.add_argument("--prompt", required=True, help="Continuation beat prompt")
+    ext_p.add_argument("--duration", type=float, default=6.0, help="Extension segment duration (3–10s)")
+    ext_p.add_argument("--provider", default=None)
+    ext_p.add_argument("--model", default=None)
 
     rev_p = sub.add_parser("revise", help="Apply a controlled targeted revision preserving unaffected decisions")
     rev_p.add_argument("--email", required=True)
@@ -91,6 +107,10 @@ def build_parser() -> argparse.ArgumentParser:
     exp_p.add_argument("--email", required=True)
     exp_p.add_argument("--asset-id", required=True)
     exp_p.add_argument("--out", required=True)
+
+    vm_p = sub.add_parser("verify-manual", help="Audit data/protocols_170.json page-by-page against original 170-Protocol Manual PDF/text")
+    vm_p.add_argument("--source", required=True, help="Path to original 170-Protocol Manual (.pdf, .txt, or .md)")
+    vm_p.add_argument("--update-registry", action="store_true", help="Upgrade matched protocols to page_verified")
 
     srv_p = sub.add_parser("serve", help="Run Production Studio HTTP API & Web UI server")
     srv_p.add_argument("--host", default="127.0.0.1")
@@ -179,12 +199,18 @@ def main(argv: list[str] | None = None) -> int:
         if not plan:
             print(f"Error: plan not found: {args.plan_id}", file=sys.stderr)
             return 1
-        quote = rt.jobs.request_quote(user=user, plan=plan, provider_id=args.provider, model_id=args.model)
+        quote = rt.jobs.request_quote(
+            user=user,
+            plan=plan,
+            provider_id=args.provider,
+            model_id=args.model,
+            variation_count=args.variations,
+        )
         if not args.approve:
             _emit({"status": "awaiting_explicit_approval", "quote": quote.model_dump(), "next": "Re-run with --approve after verifying quote"})
             return 0
         try:
-            job, asset, review = rt.jobs.submit_approved_job(
+            jobs, assets, reviews = rt.jobs.submit_approved_variations(
                 user=user,
                 plan=plan,
                 quote_id=quote.quote_id,
@@ -193,15 +219,76 @@ def main(argv: list[str] | None = None) -> int:
             )
             _emit(
                 {
-                    "job": job.model_dump(),
-                    "asset": asset.model_dump() if asset else None,
-                    "quality_review": review.model_dump() if review else None,
+                    "job": jobs[0].model_dump(),
+                    "asset": assets[0].model_dump() if assets else None,
+                    "quality_review": reviews[0].model_dump() if reviews else None,
+                    "jobs": [j.model_dump() for j in jobs],
+                    "assets": [a.model_dump() for a in assets],
+                    "quality_reviews": [r.model_dump() for r in reviews],
                 }
             )
             return 0
         except ProviderAdapterError as exc:
             print(f"Blocked [{exc.category.value}]: {exc}", file=sys.stderr)
             return 2
+
+    if args.command == "batch":
+        user = _resolve_user(rt, args.email)
+        pids = [p.strip() for p in args.plan_ids.split(",") if p.strip()]
+        try:
+            bquote = rt.jobs.request_batch_quote(
+                user=user,
+                project_id=args.project_id,
+                items=[{"plan_id": pid, "variation_count": args.variations} for pid in pids],
+            )
+            if not args.approve:
+                _emit({"status": "awaiting_explicit_batch_approval", "batch_quote": bquote.model_dump(), "next": "Re-run with --approve after reviewing combined cost"})
+                return 0
+            batch, jobs, assets, reviews = rt.jobs.submit_approved_batch(
+                user=user,
+                project_id=args.project_id,
+                batch_quote_id=bquote.batch_quote_id,
+                confirmation_token=bquote.confirmation_token,
+                explicit_user_confirmed=True,
+            )
+            _emit(
+                {
+                    "batch": batch.model_dump(),
+                    "jobs": [j.model_dump() for j in jobs],
+                    "assets": [a.model_dump() for a in assets],
+                    "quality_reviews": [r.model_dump() for r in reviews],
+                }
+            )
+            return 0
+        except ProviderAdapterError as exc:
+            print(f"Blocked [{exc.category.value}]: {exc}", file=sys.stderr)
+            return 2
+
+    if args.command == "extend":
+        from prodstud.engine.video_planner import build_video_extension_plan
+
+        user = _resolve_user(rt, args.email)
+        asset = rt.repo.get_asset(user.id, args.asset_id)
+        if not asset or asset.media_type != MediaType.VIDEO:
+            print(f"Error: video asset not found: {args.asset_id}", file=sys.stderr)
+            return 1
+        source_plan = rt.repo.get_plan(user.id, asset.plan_id)
+        if not source_plan:
+            print("Error: source video plan not found.", file=sys.stderr)
+            return 1
+        cap = rt.providers.resolve_capability(MediaType.VIDEO, args.provider or asset.provider_id, args.model or asset.model_id)
+        src_job = rt.repo.get_job(user.id, asset.job_id)
+        ext_plan = build_video_extension_plan(
+            source_plan=source_plan,
+            source_asset=asset,
+            continuation_prompt=args.prompt,
+            extension_duration_s=args.duration,
+            capability=cap,
+            source_provider_job_id=src_job.provider_job_id if src_job else None,
+        )
+        rt.repo.save_plan(user.id, ext_plan)
+        _emit(ext_plan.model_dump())
+        return 0
 
     if args.command == "revise":
         user = _resolve_user(rt, args.email)
@@ -235,6 +322,22 @@ def main(argv: list[str] | None = None) -> int:
         out_path.write_bytes(zip_bytes)
         _emit({"status": "exported", "path": str(out_path), "size_bytes": len(zip_bytes)})
         return 0
+
+    if args.command == "verify-manual":
+        import importlib.util
+
+        script_path = Path(__file__).resolve().parents[3] / "scripts" / "verify_manual_pages.py"
+        spec = importlib.util.spec_from_file_location("verify_manual_pages", script_path)
+        assert spec and spec.loader
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        report = mod.verify_manual_against_registry(
+            source_path=Path(args.source),
+            registry_path=settings.protocols_path,
+            update_registry=args.update_registry,
+        )
+        _emit(report)
+        return 0 if report["missing_count"] == 0 and report["title_discrepancies_count"] == 0 else 2
 
     if args.command == "serve":
         from prodstud.api.app import create_app

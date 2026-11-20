@@ -69,24 +69,33 @@ def _kelvin_accent(kelvin: int) -> tuple[int, int, int]:
     return (188, 178, 162)  # Balanced studio neutral
 
 
-def _render_blueprint_png(plan: ProductionPlanRecord, references: list[ReferencePayload]) -> bytes:
+def _render_blueprint_png(
+    plan: ProductionPlanRecord,
+    references: list[ReferencePayload],
+    *,
+    variation_index: int = 1,
+    variation_total: int = 1,
+) -> bytes:
     assert plan.image_plan is not None
     ip = plan.image_plan
     w, h = IMAGE_DIMENSIONS.get(ip.aspect_ratio, (1200, 800))
 
-    seed_bytes = hashlib.sha256(f"{plan.id}:{ip.subject}:{ip.color_temperature_k}:{plan.version}".encode()).digest()
+    seed_bytes = hashlib.sha256(
+        f"{plan.id}:{ip.subject}:{ip.color_temperature_k}:{plan.version}:v{variation_index}/{variation_total}".encode()
+    ).digest()
     accent = _kelvin_accent(ip.color_temperature_k)
 
     img = Image.new("RGB", (w, h), (22, 25, 30))
     draw = ImageDraw.Draw(img)
 
     # Subtle calibrated light-field gradient simulating motivated key direction from camera left
+    key_shift = (variation_index - 1) * 0.06
     for y in range(0, h, 4):
         for x in range(0, w, 8):
             nx = x / max(1, w)
             ny = y / max(1, h)
             # Key falloff from upper-left toward lower-right
-            dist = math.hypot((nx - 0.25) * 1.1, (ny - 0.30) * 1.1)
+            dist = math.hypot((nx - (0.25 + key_shift)) * 1.1, (ny - 0.30) * 1.1)
             glow = max(0.0, 1.0 - dist * 1.05)
             r = int(20 + glow * (accent[0] * 0.32))
             g = int(23 + glow * (accent[1] * 0.32))
@@ -102,8 +111,9 @@ def _render_blueprint_png(plan: ProductionPlanRecord, references: list[Reference
         draw.line([(gx, margin), (gx, h - margin)], fill=(54, 60, 70), width=1)
         draw.line([(margin, gy), (w - margin, gy)], fill=(54, 60, 70), width=1)
 
-    # Subject geometric focal target & contact shadow demonstration
-    cx, cy = int(w * 0.50), int(h * 0.50)
+    # Subject geometric focal target & contact shadow demonstration (micro-shifted per variation)
+    var_dx = int(((variation_index - 1) - (variation_total - 1) / 2.0) * min(w, h) * 0.06) if variation_total > 1 else 0
+    cx, cy = int(w * 0.50) + var_dx, int(h * 0.50)
     rad = int(min(w, h) * 0.16)
     draw.ellipse([cx - rad + 22, cy + rad - 12, cx + rad + 30, cy + rad + 20], fill=(12, 14, 17))
     draw.ellipse([cx - rad, cy - rad, cx + rad, cy + rad], fill=(42, 47, 56), outline=accent, width=3)
@@ -130,9 +140,10 @@ def _render_blueprint_png(plan: ProductionPlanRecord, references: list[Reference
 
     # Honest non-billable test render banner
     draw.rectangle([margin, margin, w - margin, margin + 38], fill=(38, 30, 20))
+    var_tag = f"  ·  VARIATION {variation_index}/{variation_total}" if variation_total > 1 else ""
     draw.text(
         (margin + 14, margin + 11),
-        "LOCAL TEST RENDER  ·  NON-BILLABLE WORKFLOW VERIFICATION (NOT GOOGLE LIVE)",
+        f"LOCAL TEST RENDER  ·  NON-BILLABLE WORKFLOW VERIFICATION (NOT GOOGLE LIVE){var_tag}",
         fill=(242, 180, 92),
         font=font_sm,
     )
@@ -149,7 +160,7 @@ def _render_blueprint_png(plan: ProductionPlanRecord, references: list[Reference
         f"OPTICS: {ip.focal_length_mm}mm · {ip.aperture} · {ip.aspect_ratio} ({w}x{h}px) · {ip.resolution}",
         f"LIGHTING: ~{ip.color_temperature_k}K · {ip.lighting_contrast_ratio}",
         f"ENVIRONMENT: {ip.environment[:76]}",
-        f"LOCKS: {len(ip.hard_locks)} hard lock(s) · {len(references)} reference(s) · SIG:{seed_bytes.hex()[:8]}",
+        f"LOCKS: {len(ip.hard_locks)} hard lock(s) · {len(references)} reference(s) · VAR:{variation_index}/{variation_total} · SIG:{seed_bytes.hex()[:8]}",
     ]
     my = h - margin - (len(meta_lines) * 20) - (100 if references else 14)
     for mline in meta_lines:
@@ -210,14 +221,27 @@ class LocalTestImageAdapter(ImageProviderAdapter):
         api_key: str | None,
         idempotency_key: str,
         previous_provider_job_id: str | None = None,
+        variation_index: int = 1,
+        variation_total: int = 1,
     ) -> ProviderSubmissionResult:
-        png_bytes = _render_blueprint_png(plan, references)
+        png_bytes = _render_blueprint_png(
+            plan,
+            references,
+            variation_index=variation_index,
+            variation_total=variation_total,
+        )
         return ProviderSubmissionResult(
             status=JobStatus.SUCCEEDED,
             provider_job_id=f"local_img_{idempotency_key[:12]}",
             media_bytes=png_bytes,
             mime_type="image/png",
-            diagnostics={"provider": self.provider_id, "model": model_id, "is_local_test_fixture": True},
+            diagnostics={
+                "provider": self.provider_id,
+                "model": model_id,
+                "is_local_test_fixture": True,
+                "variation_index": variation_index,
+                "variation_total": variation_total,
+            },
             reported_cost_usd=0.0,
         )
 
@@ -266,9 +290,17 @@ class LocalTestVideoAdapter(VideoProviderAdapter):
     def validate_request(self, plan: ProductionPlanRecord, model_id: str, references: list[ReferencePayload]) -> list[str]:
         if plan.media_type != MediaType.VIDEO or not plan.video_plan:
             return ["Requires a timed Video production plan."]
-        if plan.video_plan.aspect_ratio not in VIDEO_DIMENSIONS:
-            return [f"Aspect ratio '{plan.video_plan.aspect_ratio}' unsupported by local test video fixture."]
-        if not (3.0 <= plan.video_plan.total_duration_s <= 15.0):
+        vp = plan.video_plan
+        if vp.aspect_ratio not in VIDEO_DIMENSIONS:
+            return [f"Aspect ratio '{vp.aspect_ratio}' unsupported by local test video fixture."]
+        is_extension = vp.extended_from_asset_id is not None or vp.extension_duration_s is not None
+        if is_extension:
+            ext_dur = float(vp.extension_duration_s or 0.0)
+            if not (3.0 <= ext_dur <= 10.0):
+                return ["Local test video extension segment must be between 3s and 10s matching Gemini Omni 1.2 Flash."]
+            if vp.total_duration_s > 30.0:
+                return ["Cumulative extended video duration cannot exceed 30s matching Gemini Omni 1.2 Flash."]
+        elif not (3.0 <= vp.total_duration_s <= 15.0):
             return ["Local test video fixture supports 3–15s clips matching Gemini Omni 1.2 Flash single-clip window."]
         return []
 
@@ -292,7 +324,12 @@ class LocalTestVideoAdapter(VideoProviderAdapter):
         return ProviderSubmissionResult(
             status=JobStatus.PROCESSING,
             provider_job_id=pjid,
-            diagnostics={"provider": self.provider_id, "model": model_id, "is_local_test_fixture": True},
+            diagnostics={
+                "provider": self.provider_id,
+                "model": model_id,
+                "is_local_test_fixture": True,
+                "previous_provider_job_id": previous_provider_job_id,
+            },
             reported_cost_usd=0.0,
         )
 
@@ -319,12 +356,17 @@ class LocalTestVideoAdapter(VideoProviderAdapter):
         vp = plan.video_plan
         w, h = VIDEO_DIMENSIONS.get(vp.aspect_ratio, (960, 540))
         fps = 24
-        # Render keyframe per 0.5s (2 Hz input upsampled cleanly to 24 FPS H.264 MP4) -> fast (<0.8s) & valid playable MP4!
+        # Render keyframe per 0.5s (2 Hz input upsampled cleanly to 24 FPS H.264 MP4) -> fast & valid playable MP4
         sample_hz = 2
         total_samples = max(6, int(round(vp.total_duration_s * sample_hz)))
         font_lg = _load_font(20)
         font_md = _load_font(14)
         font_sm = _load_font(12)
+        ext_seam_s = (
+            round(vp.total_duration_s - float(vp.extension_duration_s), 1)
+            if vp.extended_from_asset_id and vp.extension_duration_s
+            else None
+        )
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -340,14 +382,16 @@ class LocalTestVideoAdapter(VideoProviderAdapter):
                 draw = ImageDraw.Draw(img)
                 # Subtle progress sweep bar simulating camera motion across shot
                 shot_progress = min(1.0, max(0.0, (t - active_shot.start_s) / max(0.1, active_shot.duration_s)))
-                accent = (224, 145, 46)
+                is_ext_frame = ext_seam_s is not None and t >= ext_seam_s - 0.05
+                accent = (74, 182, 138) if is_ext_frame else (224, 145, 46)
                 margin = 28
                 draw.rectangle([margin, margin, w - margin, h - margin], outline=(68, 76, 88), width=2)
-                draw.rectangle([margin, margin, w - margin, margin + 32], fill=(40, 31, 19))
+                draw.rectangle([margin, margin, w - margin, margin + 32], fill=(22, 42, 34) if is_ext_frame else (40, 31, 19))
+                banner_tail = f"  ·  EXTENSION +{vp.extension_duration_s:.1f}s" if is_ext_frame and vp.extension_duration_s else ""
                 draw.text(
                     (margin + 12, margin + 9),
-                    "LOCAL TEST ANIMATIC  ·  NON-BILLABLE WORKFLOW VERIFICATION (NOT GOOGLE LIVE)",
-                    fill=(242, 180, 92),
+                    f"LOCAL TEST ANIMATIC  ·  NON-BILLABLE WORKFLOW VERIFICATION (NOT GOOGLE LIVE){banner_tail}",
+                    fill=(120, 224, 178) if is_ext_frame else (242, 180, 92),
                     font=font_sm,
                 )
 

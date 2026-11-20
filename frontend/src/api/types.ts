@@ -136,6 +136,9 @@ export interface VideoSequencePlan {
   feasibility_status: string;
   feasibility_notes: string[];
   alternative_proposals: string[];
+  extended_from_asset_id?: string | null;
+  extension_duration_s?: number | null;
+  source_provider_job_id?: string | null;
 }
 
 export interface ProductionPlanRecord {
@@ -197,8 +200,10 @@ export interface ApprovalQuote {
   provider_id: string;
   model_id: string;
   media_type: MediaType;
+  variation_count: number;
   is_billable: boolean;
   is_local_test_fixture: boolean;
+  unit_estimated_cost_usd: number | null;
   estimated_cost_usd: number | null;
   pricing_disclosure: string;
   user_daily_spend_cap_usd: number;
@@ -209,6 +214,78 @@ export interface ApprovalQuote {
   credential_reason: string;
   settings_summary: Record<string, unknown>;
   feasibility_warnings: string[];
+  previous_provider_job_id?: string | null;
+  confirmation_token: string;
+  expires_at: string;
+}
+
+export interface BatchQuoteItem {
+  plan_id: string;
+  plan_summary: string;
+  media_type: MediaType;
+  provider_id: string;
+  model_id: string;
+  variation_count: number;
+  is_billable: boolean;
+  is_local_test_fixture: boolean;
+  unit_estimated_cost_usd: number | null;
+  subtotal_estimated_cost_usd: number | null;
+  pricing_disclosure: string;
+  validation_errors: string[];
+  settings_summary: Record<string, unknown>;
+}
+
+export interface BatchApprovalQuote {
+  batch_quote_id: string;
+  project_id: string;
+  items: BatchQuoteItem[];
+  total_requested_outputs: number;
+  has_billable_items: boolean;
+  has_dynamic_pricing_items: boolean;
+  total_estimated_cost_usd: number | null;
+  user_daily_spend_cap_usd: number;
+  user_spent_today_usd: number;
+  spend_guard_allows: boolean;
+  spend_guard_reason: string;
+  credential_ready: boolean;
+  credential_reason: string;
+  feasibility_warnings: string[];
+  confirmation_token: string;
+  expires_at: string;
+}
+
+export interface BatchExecutionRecord {
+  batch_id: string;
+  project_id: string;
+  batch_quote_id: string;
+  status: string;
+  total_requested_outputs: number;
+  completed_outputs: number;
+  failed_outputs: number;
+  halted_reason: string | null;
+  job_ids: string[];
+  asset_ids: string[];
+  total_recorded_cost_usd: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface VisionQCQuote {
+  quote_id: string;
+  asset_id: string;
+  provider_id: string;
+  model_id: string;
+  is_billable: boolean;
+  estimated_cost_usd: number;
+  pricing_disclosure: string;
+  frames_to_inspect: number;
+  includes_source_comparison: boolean;
+  user_daily_spend_cap_usd: number;
+  user_spent_today_usd: number;
+  spend_guard_allows: boolean;
+  spend_guard_reason: string;
+  credential_ready: boolean;
+  credential_reason: string;
   confirmation_token: string;
   expires_at: string;
 }
@@ -294,7 +371,7 @@ export interface QualityReviewRecord {
   limitations: string[];
   dimensions: QualityDimensionScore[];
   findings: QualityFinding[];
-  ai_tell_checklist: Array<{ id: string; label: string; check_status: string }>;
+  ai_tell_checklist: Array<{ id: string; label: string; check_status: string; evidence?: string }>;
   design_fit_notes: string[];
   human_feedback_status: string | null;
   human_feedback_note: string | null;

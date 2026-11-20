@@ -11,6 +11,8 @@ from prodstud.domain.enums import ErrorCategory, JobStatus, MediaType, Reference
 from prodstud.domain.models import (
     ApprovalQuote,
     AuditEventRecord,
+    BatchApprovalQuote,
+    BatchExecutionRecord,
     CredentialSummary,
     GeneratedAssetRecord,
     GenerationJobRecord,
@@ -21,6 +23,7 @@ from prodstud.domain.models import (
     ReferenceAssetRecord,
     RevisionRecord,
     UserProfile,
+    VisionQCQuote,
 )
 from prodstud.security import redact_secrets
 from prodstud.storage.database import Database, utc_day_str, utcnow_iso
@@ -1163,3 +1166,142 @@ class Repository:
             ]
         finally:
             conn.close()
+
+    def list_quality_reviews(self, user_id: str, asset_id: str) -> list[QualityReviewRecord]:
+        conn = self.db.connect()
+        try:
+            rows = conn.execute(
+                "SELECT review_json, human_feedback_status, human_feedback_note FROM quality_reviews WHERE user_id = ? AND asset_id = ? ORDER BY created_at DESC",
+                (user_id, asset_id),
+            ).fetchall()
+            out: list[QualityReviewRecord] = []
+            for row in rows:
+                rec = QualityReviewRecord.model_validate_json(row["review_json"])
+                rec.human_feedback_status = row["human_feedback_status"]
+                rec.human_feedback_note = row["human_feedback_note"]
+                out.append(rec)
+            return out
+        finally:
+            conn.close()
+
+    # ── Batch Quotes & Generation Batches (Phase 2) ────────────────────────
+    def save_batch_quote(self, user_id: str, quote: BatchApprovalQuote) -> BatchApprovalQuote:
+        with self.db.transaction() as conn:
+            conn.execute(
+                """INSERT INTO batch_quotes
+                   (batch_quote_id, user_id, project_id, quote_json, confirmation_token, consumed, created_at, expires_at)
+                   VALUES (?, ?, ?, ?, ?, 0, ?, ?)""",
+                (
+                    quote.batch_quote_id,
+                    user_id,
+                    quote.project_id,
+                    quote.model_dump_json(),
+                    quote.confirmation_token,
+                    utcnow_iso(),
+                    quote.expires_at,
+                ),
+            )
+        return quote
+
+    def get_batch_quote_row(self, user_id: str, batch_quote_id: str) -> dict[str, Any] | None:
+        conn = self.db.connect()
+        try:
+            row = conn.execute(
+                "SELECT * FROM batch_quotes WHERE batch_quote_id = ? AND user_id = ?",
+                (batch_quote_id, user_id),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def mark_batch_quote_consumed(self, batch_quote_id: str) -> None:
+        with self.db.transaction() as conn:
+            conn.execute("UPDATE batch_quotes SET consumed = 1 WHERE batch_quote_id = ?", (batch_quote_id,))
+
+    def save_batch(self, user_id: str, batch: BatchExecutionRecord) -> BatchExecutionRecord:
+        with self.db.transaction() as conn:
+            conn.execute(
+                """INSERT INTO generation_batches
+                   (batch_id, project_id, user_id, batch_quote_id, status, record_json, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    batch.batch_id,
+                    batch.project_id,
+                    user_id,
+                    batch.batch_quote_id,
+                    batch.status,
+                    batch.model_dump_json(),
+                    batch.created_at,
+                    batch.updated_at,
+                ),
+            )
+        self.touch_project(batch.project_id)
+        return batch
+
+    def update_batch(self, user_id: str, batch: BatchExecutionRecord) -> BatchExecutionRecord:
+        batch.updated_at = utcnow_iso()
+        with self.db.transaction() as conn:
+            conn.execute(
+                """UPDATE generation_batches
+                   SET status = ?, record_json = ?, updated_at = ?
+                   WHERE batch_id = ? AND user_id = ?""",
+                (batch.status, batch.model_dump_json(), batch.updated_at, batch.batch_id, user_id),
+            )
+        return batch
+
+    def get_batch(self, user_id: str, batch_id: str) -> BatchExecutionRecord | None:
+        conn = self.db.connect()
+        try:
+            row = conn.execute(
+                "SELECT record_json FROM generation_batches WHERE batch_id = ? AND user_id = ?",
+                (batch_id, user_id),
+            ).fetchone()
+            return BatchExecutionRecord.model_validate_json(row["record_json"]) if row else None
+        finally:
+            conn.close()
+
+    def list_batches(self, user_id: str, project_id: str) -> list[BatchExecutionRecord]:
+        conn = self.db.connect()
+        try:
+            rows = conn.execute(
+                "SELECT record_json FROM generation_batches WHERE user_id = ? AND project_id = ? ORDER BY created_at DESC LIMIT 50",
+                (user_id, project_id),
+            ).fetchall()
+            return [BatchExecutionRecord.model_validate_json(r["record_json"]) for r in rows]
+        finally:
+            conn.close()
+
+    # ── Optional Multimodal Vision QC Quotes (Phase 2) ─────────────────────
+    def save_vision_quote(self, user_id: str, quote: VisionQCQuote) -> VisionQCQuote:
+        with self.db.transaction() as conn:
+            conn.execute(
+                """INSERT INTO vision_qc_quotes
+                   (quote_id, user_id, asset_id, quote_json, confirmation_token, consumed, created_at, expires_at)
+                   VALUES (?, ?, ?, ?, ?, 0, ?, ?)""",
+                (
+                    quote.quote_id,
+                    user_id,
+                    quote.asset_id,
+                    quote.model_dump_json(),
+                    quote.confirmation_token,
+                    utcnow_iso(),
+                    quote.expires_at,
+                ),
+            )
+        return quote
+
+    def get_vision_quote_row(self, user_id: str, quote_id: str) -> dict[str, Any] | None:
+        conn = self.db.connect()
+        try:
+            row = conn.execute(
+                "SELECT * FROM vision_qc_quotes WHERE quote_id = ? AND user_id = ?",
+                (quote_id, user_id),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def mark_vision_quote_consumed(self, quote_id: str) -> None:
+        with self.db.transaction() as conn:
+            conn.execute("UPDATE vision_qc_quotes SET consumed = 1 WHERE quote_id = ?", (quote_id,))
+

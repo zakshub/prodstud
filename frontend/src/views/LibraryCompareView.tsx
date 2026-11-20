@@ -43,6 +43,14 @@ export const LibraryCompareView: React.FC<Props> = ({
   };
 
   useEffect(() => {
+    if (initialComparePair && initialComparePair[0] && initialComparePair[1]) {
+      setLeftId(initialComparePair[0]);
+      setRightId(initialComparePair[1]);
+      setTab("compare");
+    }
+  }, [initialComparePair]);
+
+  useEffect(() => {
     loadAssets();
   }, [mediaFilter, favOnly]);
 

@@ -31,7 +31,12 @@ STANDARD_IMAGE_RATIOS = ["1:1", "3:4", "4:3", "9:16", "16:9", "2:3", "3:2", "4:5
 PANORAMIC_IMAGE_RATIOS = STANDARD_IMAGE_RATIOS + ["1:4", "4:1", "1:8", "8:1"]
 
 
-def _compile_google_image_directive(plan: ProductionPlanRecord) -> str:
+def _compile_google_image_directive(
+    plan: ProductionPlanRecord,
+    *,
+    variation_index: int = 1,
+    variation_total: int = 1,
+) -> str:
     """Translate provider-neutral ImagePlanDetails into physically causal prompt inside adapter boundary."""
     p = plan.image_plan
     assert p is not None
@@ -44,6 +49,11 @@ def _compile_google_image_directive(plan: ProductionPlanRecord) -> str:
         f"COMPOSITION: {p.composition_rule}; {p.shot_framing}.",
         f"COLOR & MATERIAL PHYSICS: {p.color_palette}. {p.material_and_texture}. Atmosphere: {p.atmosphere}.",
     ]
+    if variation_total > 1:
+        lines.append(
+            f"VARIATION TAKE: {variation_index} of {variation_total} — provide a distinct natural micro-variation in pose/framing cadence "
+            "while strictly maintaining camera optics, lighting architecture, and all HARD PRESERVATION LOCKS."
+        )
     if p.hard_locks:
         lines.append("HARD PRESERVATION LOCKS (DO NOT ALTER): " + "; ".join(p.hard_locks))
     if p.allowed_changes:
@@ -231,6 +241,8 @@ class GoogleImageAdapter(ImageProviderAdapter):
         api_key: str | None,
         idempotency_key: str,
         previous_provider_job_id: str | None = None,
+        variation_index: int = 1,
+        variation_total: int = 1,
     ) -> ProviderSubmissionResult:
         if not api_key:
             raise ProviderAdapterError("Missing server-side Google API key.", category=ErrorCategory.PROVIDER_AUTH)
@@ -239,7 +251,11 @@ class GoogleImageAdapter(ImageProviderAdapter):
             raise ProviderAdapterError("; ".join(errors), category=ErrorCategory.VALIDATION)
 
         assert plan.image_plan is not None
-        directive = _compile_google_image_directive(plan)
+        directive = _compile_google_image_directive(
+            plan,
+            variation_index=variation_index,
+            variation_total=variation_total,
+        )
 
         # Build verified Gemini Interactions API request body (supports aspect_ratio, image_size, previous_interaction_id, multi-reference)
         input_items: list[dict[str, Any]] = [{"type": "text", "text": directive}]

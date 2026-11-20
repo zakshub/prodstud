@@ -122,10 +122,19 @@ def login(
 
 @router.post("/api/auth/logout")
 def logout(
+    request: Request,
     response: Response,
     user: UserProfile = Depends(get_current_user),
     rt: AppRuntime = Depends(get_runtime),
 ) -> dict:
+    raw_token = None
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        raw_token = auth_header[7:].strip()
+    if not raw_token:
+        raw_token = request.cookies.get(SESSION_COOKIE)
+    if raw_token:
+        rt.repo.delete_session(hash_session_token(raw_token))
     response.delete_cookie(SESSION_COOKIE)
     rt.repo.record_audit(
         user_id=user.id,
@@ -133,7 +142,7 @@ def logout(
         event_type="user_logged_out",
         entity_type="user",
         entity_id=user.id,
-        payload={},
+        payload={"server_session_revoked": bool(raw_token)},
     )
     return {"status": "logged_out"}
 

@@ -1,35 +1,58 @@
-import React, { useState } from "react";
-import type { ImagePlanDetails, ProductionPlanRecord } from "../api/types";
+import React, { useEffect, useState } from "react";
+import type { ImagePlanDetails, ProductionPlanRecord, VideoSequencePlan } from "../api/types";
 import { ShotStoryboard } from "./ShotStoryboard";
 import { StatusBadge } from "./StatusBadge";
 
 interface Props {
   plan: ProductionPlanRecord;
   onSaveEdits: (planId: string, imagePlan: ImagePlanDetails) => Promise<void>;
+  onSaveVideoEdits?: (planId: string, videoPlan: VideoSequencePlan) => Promise<void>;
   onApplyDefaultField: (field: string, value: string) => void;
 }
 
-export const PlanView: React.FC<Props> = ({ plan, onSaveEdits, onApplyDefaultField }) => {
+export const PlanView: React.FC<Props> = ({ plan, onSaveEdits, onSaveVideoEdits, onApplyDefaultField }) => {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showProtocols, setShowProtocols] = useState(false);
   const [editingImage, setEditingImage] = useState<ImagePlanDetails | null>(null);
+  const [editingVideo, setEditingVideo] = useState<VideoSequencePlan | null>(null);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setEditingImage(null);
+    setEditingVideo(null);
+  }, [plan.id]);
 
   const img = editingImage ?? plan.image_plan;
 
   const startEdit = () => {
-    if (plan.image_plan) {
+    if (plan.media_type === "image" && plan.image_plan) {
       setEditingImage({ ...plan.image_plan });
       setShowAdvanced(true);
+    } else if (plan.media_type === "video" && plan.video_plan && onSaveVideoEdits) {
+      setEditingVideo({
+        ...plan.video_plan,
+        shots: plan.video_plan.shots.map((s) => ({ ...s })),
+      });
     }
   };
 
-  const commitEdit = async () => {
+  const commitImageEdit = async () => {
     if (!editingImage) return;
     setSaving(true);
     try {
       await onSaveEdits(plan.id, editingImage);
       setEditingImage(null);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const commitVideoEdit = async () => {
+    if (!editingVideo || !onSaveVideoEdits) return;
+    setSaving(true);
+    try {
+      await onSaveVideoEdits(plan.id, editingVideo);
+      setEditingVideo(null);
     } finally {
       setSaving(false);
     }
@@ -42,6 +65,12 @@ export const PlanView: React.FC<Props> = ({ plan, onSaveEdits, onApplyDefaultFie
           <div className="btn-row">
             <h2>Production Plan v{plan.version}</h2>
             <StatusBadge status={plan.media_type === "image" ? "core" : "adapted"} label={plan.media_type.toUpperCase()} />
+            {plan.video_plan?.extended_from_asset_id && (
+              <StatusBadge
+                status="supported"
+                label={`EXTENSION +${plan.video_plan.extension_duration_s ?? 0}s`}
+              />
+            )}
             <StatusBadge status={plan.feasibility_ok ? "feasible" : "requires_alternative"} label={plan.feasibility_ok ? "FEASIBLE" : "NEEDS ATTENTION"} />
           </div>
           <span className="small-mono">
@@ -53,8 +82,9 @@ export const PlanView: React.FC<Props> = ({ plan, onSaveEdits, onApplyDefaultFie
           <button type="button" className="btn btn-sm" onClick={() => setShowProtocols((s) => !s)}>
             {showProtocols ? "Hide Protocol Trace" : `Protocol Trace (${plan.activated_protocols.length})`}
           </button>
-          {plan.media_type === "image" && plan.image_plan && !editingImage && (
-            <button type="button" className="btn btn-sm" onClick={startEdit}>
+          {((plan.media_type === "image" && plan.image_plan && !editingImage) ||
+            (plan.media_type === "video" && plan.video_plan && onSaveVideoEdits && !editingVideo)) && (
+            <button id="edit-plan-controls-btn" type="button" className="btn btn-sm" onClick={startEdit}>
               Edit Plan Controls
             </button>
           )}
@@ -62,6 +92,17 @@ export const PlanView: React.FC<Props> = ({ plan, onSaveEdits, onApplyDefaultFie
       </div>
 
       <p style={{ margin: 0 }}>{plan.summary}</p>
+
+      {plan.feasibility_warnings.length > 0 && (
+        <div className="callout callout-warning">
+          <strong>Provider Feasibility Alerts:</strong>
+          <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
+            {plan.feasibility_warnings.map((w, i) => (
+              <li key={i}>{w}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {plan.contradictions.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -214,7 +255,7 @@ export const PlanView: React.FC<Props> = ({ plan, onSaveEdits, onApplyDefaultFie
                 />
               </div>
               <div className="btn-row">
-                <button type="button" className="btn btn-primary btn-sm" disabled={saving} onClick={commitEdit}>
+                <button type="button" className="btn btn-primary btn-sm" disabled={saving} onClick={commitImageEdit}>
                   {saving ? "Saving..." : "Save Plan Edits"}
                 </button>
                 <button type="button" className="btn btn-sm" onClick={() => setEditingImage(null)}>
@@ -226,8 +267,103 @@ export const PlanView: React.FC<Props> = ({ plan, onSaveEdits, onApplyDefaultFie
         </div>
       )}
 
-      {/* Dedicated Timed Video Shot Storyboard */}
-      {plan.media_type === "video" && plan.video_plan && <ShotStoryboard videoPlan={plan.video_plan} />}
+      {/* Dedicated Timed Video Shot Storyboard + Inline Video Editor */}
+      {plan.media_type === "video" && plan.video_plan && (
+        <>
+          {editingVideo ? (
+            <div className="subpanel" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <h3>Edit Timed Video Plan Controls</h3>
+              <div className="form-grid-3">
+                <div className="field">
+                  <label htmlFor="edit-vid-dur">Total Duration (s)</label>
+                  <input
+                    id="edit-vid-dur"
+                    type="number"
+                    min={3}
+                    max={30}
+                    step={0.5}
+                    className="input mono"
+                    value={editingVideo.total_duration_s}
+                    onChange={(e) =>
+                      setEditingVideo({ ...editingVideo, total_duration_s: Number(e.target.value) || 8 })
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="edit-vid-ar">Aspect Ratio</label>
+                  <select
+                    id="edit-vid-ar"
+                    className="select mono"
+                    value={editingVideo.aspect_ratio}
+                    onChange={(e) => setEditingVideo({ ...editingVideo, aspect_ratio: e.target.value })}
+                  >
+                    <option value="16:9">16:9</option>
+                    <option value="9:16">9:16</option>
+                    <option value="1:1">1:1</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label htmlFor="edit-vid-res">Resolution</label>
+                  <select
+                    id="edit-vid-res"
+                    className="select mono"
+                    value={editingVideo.resolution}
+                    onChange={(e) => setEditingVideo({ ...editingVideo, resolution: e.target.value })}
+                  >
+                    <option value="360p">360p</option>
+                    <option value="720p">720p</option>
+                    <option value="1080p">1080p</option>
+                    <option value="4K">4K</option>
+                  </select>
+                </div>
+              </div>
+              {editingVideo.shots.map((shot, idx) => (
+                <div key={shot.shot_id} className="subpanel" style={{ gap: 8 }}>
+                  <strong className="mono">{shot.shot_id} ({shot.start_s.toFixed(1)}s–{shot.end_s.toFixed(1)}s)</strong>
+                  <div className="field">
+                    <label htmlFor={`edit-shot-action-${shot.order}`}>Subject Action ({shot.shot_id})</label>
+                    <input
+                      id={`edit-shot-action-${shot.order}`}
+                      className="input"
+                      value={shot.subject_action}
+                      onChange={(e) => {
+                        const next = editingVideo.shots.map((s, j) =>
+                          j === idx ? { ...s, subject_action: e.target.value } : s,
+                        );
+                        setEditingVideo({ ...editingVideo, shots: next });
+                      }}
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor={`edit-shot-cam-${shot.order}`}>Camera Movement ({shot.shot_id})</label>
+                    <input
+                      id={`edit-shot-cam-${shot.order}`}
+                      className="input"
+                      value={shot.camera_movement}
+                      onChange={(e) => {
+                        const next = editingVideo.shots.map((s, j) =>
+                          j === idx ? { ...s, camera_movement: e.target.value } : s,
+                        );
+                        setEditingVideo({ ...editingVideo, shots: next });
+                      }}
+                    />
+                  </div>
+                </div>
+              ))}
+              <div className="btn-row">
+                <button type="button" className="btn btn-primary btn-sm" disabled={saving} onClick={commitVideoEdit}>
+                  {saving ? "Saving & Re-validating..." : "Save Video Plan Edits"}
+                </button>
+                <button type="button" className="btn btn-sm" onClick={() => setEditingVideo(null)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <ShotStoryboard videoPlan={plan.video_plan} />
+          )}
+        </>
+      )}
 
       {/* Contextual Protocol Activation Trace (Progressive Disclosure) */}
       {showProtocols && (

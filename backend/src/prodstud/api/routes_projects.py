@@ -18,6 +18,7 @@ from prodstud.domain.models import (
     UserProfile,
 )
 from prodstud.runtime import AppRuntime
+from prodstud.security import sanitize_download_filename
 from prodstud.storage.asset_store import MediaValidationError
 
 router = APIRouter(tags=["projects_and_assets"])
@@ -140,10 +141,11 @@ async def upload_reference(
     except MediaValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    safe_name = sanitize_download_filename(file.filename or "", fallback=f"reference_{stored.sha256[:8]}.png")
     ref = rt.repo.create_reference(
         project_id=project_id,
         user_id=user.id,
-        filename=file.filename or f"reference_{stored.sha256[:8]}.png",
+        filename=safe_name,
         storage_relpath=stored.relpath,
         mime_type=stored.mime_type,
         size_bytes=stored.size_bytes,
@@ -175,7 +177,7 @@ def get_reference_file(
     if not row:
         raise HTTPException(status_code=404, detail="Reference asset not found.")
     full_path = rt.store.resolve(row["storage_relpath"])
-    return FileResponse(full_path, media_type=row["mime_type"], filename=row["filename"])
+    return FileResponse(full_path, media_type=row["mime_type"], filename=sanitize_download_filename(row["filename"]))
 
 
 @router.get("/api/assets")

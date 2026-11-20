@@ -195,7 +195,7 @@ CREATE TABLE IF NOT EXISTS revisions (
 CREATE TABLE IF NOT EXISTS spend_telemetry (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    job_id TEXT NOT NULL REFERENCES generation_jobs(id) ON DELETE CASCADE,
+    job_id TEXT NOT NULL,
     provider_id TEXT NOT NULL,
     model_id TEXT NOT NULL,
     estimated_cost_usd REAL NOT NULL DEFAULT 0.0,
@@ -225,12 +225,46 @@ CREATE TABLE IF NOT EXISTS audit_events (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS batch_quotes (
+    batch_quote_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    quote_json TEXT NOT NULL,
+    confirmation_token TEXT NOT NULL,
+    consumed INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS generation_batches (
+    batch_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    batch_quote_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    record_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS vision_qc_quotes (
+    quote_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    asset_id TEXT NOT NULL REFERENCES generated_assets(id) ON DELETE CASCADE,
+    quote_json TEXT NOT NULL,
+    confirmation_token TEXT NOT NULL,
+    consumed INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id, archived, updated_at);
 CREATE INDEX IF NOT EXISTS idx_plans_project ON production_plans(project_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_project ON generation_jobs(project_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_assets_project ON generated_assets(project_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_spend_user_day ON spend_telemetry(user_id, recorded_day);
 CREATE INDEX IF NOT EXISTS idx_audit_project ON audit_events(project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_batches_project ON generation_batches(project_id, created_at);
 """
 
 

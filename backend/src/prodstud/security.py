@@ -95,6 +95,13 @@ def mask_api_key(raw_key: str) -> str:
     return f"{trimmed[:4]}...{trimmed[-4:]}"
 
 
+def sanitize_download_filename(filename: str, fallback: str = "asset.bin") -> str:
+    """Strip CR/LF, quotes, path separators, and control chars to prevent Content-Disposition header injection."""
+    base = Path(filename or "").name
+    cleaned = re.sub(r'[\r\n"\\/;<>:*?|]+', "_", base).strip(" .")
+    return cleaned[:160] if cleaned else fallback
+
+
 class SecretVault:
     """Server-side Fernet (AES-128-CBC + HMAC-SHA256) credential encryption vault."""
 

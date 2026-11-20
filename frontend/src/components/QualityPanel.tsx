@@ -1,15 +1,30 @@
-import React, { useState } from "react";
-import type { QualityReviewRecord } from "../api/types";
+import React, { useEffect, useState } from "react";
+import { api } from "../api/client";
+import type { QualityReviewRecord, VisionQCQuote } from "../api/types";
 import { StatusBadge } from "./StatusBadge";
 
 interface Props {
   review: QualityReviewRecord;
   onFeedback: (reviewId: string, status: "accepted" | "rejected" | "needs_rework", note: string) => Promise<void>;
+  onVisionQCComplete?: (newReview: QualityReviewRecord) => Promise<void>;
 }
 
-export const QualityPanel: React.FC<Props> = ({ review, onFeedback }) => {
+export const QualityPanel: React.FC<Props> = ({ review, onFeedback, onVisionQCComplete }) => {
   const [note, setNote] = useState(review.human_feedback_note ?? "");
   const [saving, setSaving] = useState(false);
+
+  // Optional Multimodal Vision QC state (explicit quote + confirmation)
+  const [visionQuote, setVisionQuote] = useState<VisionQCQuote | null>(null);
+  const [visionConfirm, setVisionConfirm] = useState(false);
+  const [visionBusy, setVisionBusy] = useState(false);
+  const [visionError, setVisionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setNote(review.human_feedback_note ?? "");
+    setVisionQuote(null);
+    setVisionConfirm(false);
+    setVisionError(null);
+  }, [review.id, review.asset_id, review.human_feedback_note]);
 
   const handleSave = async (status: "accepted" | "rejected" | "needs_rework") => {
     setSaving(true);
@@ -19,6 +34,44 @@ export const QualityPanel: React.FC<Props> = ({ review, onFeedback }) => {
       setSaving(false);
     }
   };
+
+  const handleRequestVisionQuote = async () => {
+    setVisionBusy(true);
+    setVisionError(null);
+    setVisionConfirm(false);
+    try {
+      const q = await api.requestVisionQCQuote(review.asset_id);
+      setVisionQuote(q);
+    } catch (err) {
+      setVisionError(err instanceof Error ? err.message : "Failed to compute Vision QC quote.");
+    } finally {
+      setVisionBusy(false);
+    }
+  };
+
+  const handleRunVisionQC = async () => {
+    if (!visionQuote) return;
+    setVisionBusy(true);
+    setVisionError(null);
+    try {
+      const upgraded = await api.runVisionQC(review.asset_id, {
+        quote_id: visionQuote.quote_id,
+        confirmation_token: visionQuote.confirmation_token,
+        explicit_user_confirmed: true,
+      });
+      setVisionQuote(null);
+      setVisionConfirm(false);
+      if (onVisionQCComplete) {
+        await onVisionQCComplete(upgraded);
+      }
+    } catch (err) {
+      setVisionError(err instanceof Error ? err.message : "Multimodal Vision QC request failed.");
+    } finally {
+      setVisionBusy(false);
+    }
+  };
+
+  const visionBlocked = visionQuote ? !visionQuote.spend_guard_allows || !visionQuote.credential_ready : true;
 
   return (
     <section className="panel" aria-label="Advisory Quality Review">
@@ -99,17 +152,101 @@ export const QualityPanel: React.FC<Props> = ({ review, onFeedback }) => {
       {review.ai_tell_checklist.length > 0 && (
         <details className="subpanel">
           <summary style={{ cursor: "pointer", fontWeight: 600, fontSize: 13 }}>
-            Human Visual Screening Checklist ({review.ai_tell_checklist.length} Photographic Realism Checks)
+            Visual Screening Checklist ({review.ai_tell_checklist.length} Photographic Realism Checks)
           </summary>
           <ul style={{ margin: "8px 0 0 18px", padding: 0, fontSize: 12 }}>
             {review.ai_tell_checklist.map((t) => (
-              <li key={t.id}>
-                <span className="mono">{t.id}:</span> {t.label}
+              <li key={t.id} style={{ marginBottom: 4 }}>
+                <span className="mono">{t.id}:</span> {t.label}{" "}
+                <span className="badge badge-neutral">{t.check_status}</span>
+                {t.evidence && <span className="muted"> — {t.evidence}</span>}
               </li>
             ))}
           </ul>
         </details>
       )}
+
+      {/* Optional Multimodal Vision QC Gate (Phase 2 — Never Automatic, Explicit Approval Required) */}
+      <div className="subpanel">
+        <div className="section-head">
+          <div>
+            <h3>Optional Multimodal Vision QC</h3>
+            <div className="muted" style={{ fontSize: 12 }}>
+              Opt-in billable Gemini visual check (inspects image + references, or 3 sampled keyframes for video). Advisory only.
+            </div>
+          </div>
+          {!visionQuote && (
+            <button
+              id="request-vision-qc-quote-btn"
+              type="button"
+              className="btn btn-sm"
+              disabled={visionBusy}
+              onClick={handleRequestVisionQuote}
+            >
+              {visionBusy ? "Quoting..." : "Request Vision QC Quote"}
+            </button>
+          )}
+        </div>
+
+        {visionError && (
+          <div className="callout callout-danger" role="alert" style={{ fontSize: 12 }}>
+            {visionError}
+          </div>
+        )}
+
+        {visionQuote && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
+            <div className="kv-grid" style={{ fontSize: 12 }}>
+              <span className="kv-key">Vision Model</span>
+              <span className="mono">{visionQuote.model_id}</span>
+              <span className="kv-key">Inspection Scope</span>
+              <span className="mono">
+                {visionQuote.frames_to_inspect} frame(s) · Source Comparison: {visionQuote.includes_source_comparison ? "YES" : "NO"}
+              </span>
+              <span className="kv-key">Estimated Cost</span>
+              <span className="mono">${visionQuote.estimated_cost_usd.toFixed(4)} USD</span>
+              <span className="kv-key">Spend Guard</span>
+              <span>
+                <StatusBadge status={visionQuote.spend_guard_allows ? "supported" : "blocking"} label={visionQuote.spend_guard_allows ? "ALLOWED" : "BLOCKED"} />{" "}
+                <span className="muted">{visionQuote.spend_guard_reason}</span>
+              </span>
+              <span className="kv-key">Server Credential</span>
+              <span>
+                <StatusBadge status={visionQuote.credential_ready ? "active" : "blocking"} label={visionQuote.credential_ready ? "READY" : "MISSING"} />{" "}
+                <span className="muted">{visionQuote.credential_reason}</span>
+              </span>
+            </div>
+            <div className="muted" style={{ fontSize: 12 }}>{visionQuote.pricing_disclosure}</div>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12, cursor: visionBlocked ? "not-allowed" : "pointer" }}>
+              <input
+                id="confirm-vision-qc-checkbox"
+                type="checkbox"
+                disabled={visionBlocked || visionBusy}
+                checked={visionConfirm}
+                onChange={(e) => setVisionConfirm(e.target.checked)}
+                style={{ marginTop: 2 }}
+              />
+              <span>
+                I approve running this optional billable Vision QC inspection and understand results remain strictly advisory.
+              </span>
+            </label>
+            <div className="btn-row">
+              <button
+                id="run-vision-qc-btn"
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={visionBlocked || !visionConfirm || visionBusy}
+                onClick={handleRunVisionQC}
+              >
+                {visionBusy ? "Running Vision QC..." : "Approve & Run Vision QC"}
+              </button>
+              <button type="button" className="btn btn-sm" disabled={visionBusy} onClick={() => setVisionQuote(null)}>
+                Dismiss Quote
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
 
       {review.design_fit_notes.length > 0 && (
         <div className="muted" style={{ fontSize: 12 }}>

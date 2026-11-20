@@ -1,6 +1,8 @@
 import type {
   ApprovalQuote,
   AuditEventRecord,
+  BatchApprovalQuote,
+  BatchExecutionRecord,
   CredentialSummary,
   GeneratedAssetRecord,
   GenerationJobRecord,
@@ -14,6 +16,7 @@ import type {
   ReferenceAssetRecord,
   RevisionRecord,
   UserProfile,
+  VisionQCQuote,
 } from "./types";
 
 async function apiFetch<T>(url: string, options: RequestInit = {}): Promise<T> {
@@ -139,7 +142,7 @@ export const api = {
     }>(`/api/protocols/summary${tail}`);
   },
 
-  // Production Planning, Approval Quote, Generation Jobs, Review, Revision & Compare
+  // Production Planning, Approval Quote, Generation Jobs, Batches, Video Extension, Review, Revision & Compare
   createPlan: (projectId: string, payload: Record<string, unknown>) =>
     apiFetch<ProductionPlanRecord>(`/api/projects/${projectId}/plans`, {
       method: "POST",
@@ -149,10 +152,10 @@ export const api = {
   editPlan: (planId: string, payload: Record<string, unknown>) =>
     apiFetch<ProductionPlanRecord>(`/api/plans/${planId}`, { method: "PATCH", body: JSON.stringify(payload) }),
 
-  requestQuote: (planId: string, provider_id: string, model_id: string) =>
+  requestQuote: (planId: string, provider_id: string, model_id: string, variation_count = 1) =>
     apiFetch<ApprovalQuote>(`/api/plans/${planId}/quote`, {
       method: "POST",
-      body: JSON.stringify({ provider_id, model_id }),
+      body: JSON.stringify({ provider_id, model_id, variation_count }),
     }),
 
   submitGeneration: (
@@ -168,7 +171,41 @@ export const api = {
       job: GenerationJobRecord;
       asset: GeneratedAssetRecord | null;
       quality_review: QualityReviewRecord | null;
+      jobs: GenerationJobRecord[];
+      assets: GeneratedAssetRecord[];
+      quality_reviews: QualityReviewRecord[];
     }>(`/api/plans/${planId}/generate`, { method: "POST", body: JSON.stringify(payload) }),
+
+  requestBatchQuote: (
+    projectId: string,
+    items: Array<{ plan_id: string; provider_id?: string; model_id?: string; variation_count?: number }>,
+  ) =>
+    apiFetch<BatchApprovalQuote>(`/api/projects/${projectId}/batches/quote`, {
+      method: "POST",
+      body: JSON.stringify({ items }),
+    }),
+
+  executeBatch: (
+    projectId: string,
+    payload: { batch_quote_id: string; confirmation_token: string; explicit_user_confirmed: boolean },
+  ) =>
+    apiFetch<{
+      batch: BatchExecutionRecord;
+      jobs: GenerationJobRecord[];
+      assets: GeneratedAssetRecord[];
+      quality_reviews: QualityReviewRecord[];
+    }>(`/api/projects/${projectId}/batches/execute`, { method: "POST", body: JSON.stringify(payload) }),
+
+  listBatches: (projectId: string) => apiFetch<BatchExecutionRecord[]>(`/api/projects/${projectId}/batches`),
+
+  extendVideoAsset: (
+    assetId: string,
+    payload: { continuation_prompt: string; extension_duration_s: number; provider_id?: string; model_id?: string },
+  ) =>
+    apiFetch<ProductionPlanRecord>(`/api/assets/${assetId}/extend`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
 
   pollJob: (jobId: string) =>
     apiFetch<{
@@ -180,6 +217,20 @@ export const api = {
   cancelJob: (jobId: string) => apiFetch<{ job: GenerationJobRecord }>(`/api/jobs/${jobId}/cancel`, { method: "POST" }),
 
   getAssetReview: (assetId: string) => apiFetch<QualityReviewRecord>(`/api/assets/${assetId}/review`),
+
+  listAssetReviews: (assetId: string) => apiFetch<QualityReviewRecord[]>(`/api/assets/${assetId}/reviews`),
+
+  requestVisionQCQuote: (assetId: string) =>
+    apiFetch<VisionQCQuote>(`/api/assets/${assetId}/review/vision/quote`, { method: "POST" }),
+
+  runVisionQC: (
+    assetId: string,
+    payload: { quote_id: string; confirmation_token: string; explicit_user_confirmed: boolean },
+  ) =>
+    apiFetch<QualityReviewRecord>(`/api/assets/${assetId}/review/vision/run`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
 
   submitReviewFeedback: (reviewId: string, status: "accepted" | "rejected" | "needs_rework", note: string) =>
     apiFetch<QualityReviewRecord>(`/api/reviews/${reviewId}/feedback`, {

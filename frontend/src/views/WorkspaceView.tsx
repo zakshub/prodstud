@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import type {
   ApprovalQuote,
+  BatchApprovalQuote,
+  BatchExecutionRecord,
   GeneratedAssetRecord,
   GenerationJobRecord,
   ImagePlanDetails,
@@ -13,6 +15,7 @@ import type {
   ProviderModelCapability,
   QualityReviewRecord,
   RevisionRecord,
+  VideoSequencePlan,
 } from "../api/types";
 import { ApprovalModal } from "../components/ApprovalModal";
 import { PlanView } from "../components/PlanView";
@@ -65,8 +68,14 @@ export const WorkspaceView: React.FC<Props> = ({
   const [activeJob, setActiveJob] = useState<GenerationJobRecord | null>(null);
   const [latestRevision, setLatestRevision] = useState<RevisionRecord | null>(null);
 
-  // Quote & generation modal
+  // Phase 2: Multi-output image variations, Batch generation, Multi-turn video extension
+  const [variationCount, setVariationCount] = useState<number>(1);
   const [pendingQuote, setPendingQuote] = useState<ApprovalQuote | null>(null);
+  const [pendingBatchQuote, setPendingBatchQuote] = useState<BatchApprovalQuote | null>(null);
+  const [selectedBatchPlanIds, setSelectedBatchPlanIds] = useState<string[]>([]);
+  const [latestBatch, setLatestBatch] = useState<BatchExecutionRecord | null>(null);
+  const [extensionPrompt, setExtensionPrompt] = useState("");
+  const [extensionDurationS, setExtensionDurationS] = useState<number>(4);
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
   // Revision & asset organization inputs
@@ -79,6 +88,13 @@ export const WorkspaceView: React.FC<Props> = ({
     () => capabilities.filter((c) => c.media_type === mediaType),
     [capabilities, mediaType],
   );
+
+  // Contact sheet of sibling variation outputs sharing the active asset's plan
+  const variationSiblings = useMemo(() => {
+    if (!workspace || !activeAsset || activeAsset.media_type !== "image") return [];
+    const samePlan = workspace.assets.filter((a) => a.plan_id === activeAsset.plan_id && a.media_type === "image");
+    return samePlan.length > 1 ? [...samePlan].reverse() : [];
+  }, [workspace, activeAsset]);
 
   // Select sensible default model only when mediaType changes or current selection is not valid for mediaType
   useEffect(() => {
@@ -108,6 +124,8 @@ export const WorkspaceView: React.FC<Props> = ({
       if (!preserveActive) {
         setActivePlan(data.plans[0] ?? null);
         setActiveJob(data.jobs[0] ?? null);
+        setSelectedBatchPlanIds([]);
+        setLatestBatch(null);
         const latestAsset = data.assets[0] ?? null;
         setActiveAsset(latestAsset);
         if (latestAsset) {
@@ -209,19 +227,26 @@ export const WorkspaceView: React.FC<Props> = ({
     await loadWorkspace(activeProjectId, true);
   };
 
+  const handleSaveVideoPlanEdits = async (planId: string, videoPlan: VideoSequencePlan) => {
+    const updated = await api.editPlan(planId, { video_plan: videoPlan });
+    setActivePlan(updated);
+    await loadWorkspace(activeProjectId, true);
+  };
+
   const handleRequestQuote = async () => {
     if (!activePlan) return;
     setBusyAction("quoting");
     setError(null);
     try {
       const [provider_id, model_id] = selectedProviderAndModel();
-      // If active plan's media type differs from brief switcher, respect active plan's media type
       const validCap = capabilities.find(
         (c) => c.media_type === activePlan.media_type && c.provider_id === provider_id && c.model_id === model_id,
       );
       const targetProvider = validCap ? provider_id : activePlan.recommended_provider;
       const targetModel = validCap ? model_id : activePlan.recommended_model;
-      const quote = await api.requestQuote(activePlan.id, targetProvider, targetModel);
+      const count = activePlan.media_type === "image" ? variationCount : 1;
+      const quote = await api.requestQuote(activePlan.id, targetProvider, targetModel, count);
+      setPendingBatchQuote(null);
       setPendingQuote(quote);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to compute approval quote.");
@@ -231,6 +256,39 @@ export const WorkspaceView: React.FC<Props> = ({
   };
 
   const handleConfirmGenerate = async () => {
+    if (pendingBatchQuote) {
+      setBusyAction("generating");
+      setError(null);
+      try {
+        const res = await api.executeBatch(activeProjectId, {
+          batch_quote_id: pendingBatchQuote.batch_quote_id,
+          confirmation_token: pendingBatchQuote.confirmation_token,
+          explicit_user_confirmed: true,
+        });
+        setPendingBatchQuote(null);
+        setLatestBatch(res.batch);
+        setSelectedBatchPlanIds([]);
+        if (res.jobs.length > 0) setActiveJob(res.jobs[res.jobs.length - 1]);
+        if (res.assets.length > 0) {
+          const newest = res.assets[res.assets.length - 1];
+          setActiveAsset(newest);
+          setTagsInput(newest.tags.join(", "));
+          setCollectionInput(newest.collection_name ?? "");
+        }
+        if (res.quality_reviews.length > 0) {
+          setActiveReview(res.quality_reviews[res.quality_reviews.length - 1]);
+        }
+        await loadWorkspace(activeProjectId, true);
+        await onRefreshGlobal();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Batch execution failed.");
+        setPendingBatchQuote(null);
+      } finally {
+        setBusyAction(null);
+      }
+      return;
+    }
+
     if (!activePlan || !pendingQuote) return;
     setBusyAction("generating");
     setError(null);
@@ -239,7 +297,8 @@ export const WorkspaceView: React.FC<Props> = ({
         quote_id: pendingQuote.quote_id,
         confirmation_token: pendingQuote.confirmation_token,
         explicit_user_confirmed: true,
-        parent_asset_id: activePlan.parent_plan_id ? activeAsset?.id ?? null : null,
+        parent_asset_id:
+          activePlan.video_plan?.extended_from_asset_id ?? (activePlan.parent_plan_id ? activeAsset?.id ?? null : null),
       });
       setPendingQuote(null);
       setActiveJob(res.job);
@@ -256,6 +315,45 @@ export const WorkspaceView: React.FC<Props> = ({
     } catch (err) {
       setError(err instanceof Error ? err.message : "Generation request failed.");
       setPendingQuote(null);
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const handleRequestBatchQuote = async () => {
+    if (selectedBatchPlanIds.length === 0) return;
+    setBusyAction("batch-quoting");
+    setError(null);
+    try {
+      const items = selectedBatchPlanIds.map((pid) => ({
+        plan_id: pid,
+        variation_count: 1,
+      }));
+      const bq = await api.requestBatchQuote(activeProjectId, items);
+      setPendingQuote(null);
+      setPendingBatchQuote(bq);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to compute combined batch quote.");
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const handleCreateVideoExtension = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeAsset || activeAsset.media_type !== "video" || !extensionPrompt.trim()) return;
+    setBusyAction("extending");
+    setError(null);
+    try {
+      const extPlan = await api.extendVideoAsset(activeAsset.id, {
+        continuation_prompt: extensionPrompt.trim(),
+        extension_duration_s: extensionDurationS,
+      });
+      setActivePlan(extPlan);
+      setExtensionPrompt("");
+      await loadWorkspace(activeProjectId, true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Video extension plan failed.");
     } finally {
       setBusyAction(null);
     }
@@ -492,6 +590,23 @@ export const WorkspaceView: React.FC<Props> = ({
           </div>
         )}
 
+        {latestBatch && (
+          <section
+            className={`callout ${latestBatch.status === "completed" ? "callout-info" : "callout-warning"}`}
+            aria-label="Batch Execution Summary"
+          >
+            <strong>Batch {latestBatch.batch_id} ({latestBatch.status.toUpperCase()}):</strong>{" "}
+            Completed <span className="mono">{latestBatch.completed_outputs}/{latestBatch.total_requested_outputs}</span> output(s)
+            {latestBatch.failed_outputs > 0 ? ` · ${latestBatch.failed_outputs} failed` : ""} · Recorded cost{" "}
+            <span className="mono">${latestBatch.total_recorded_cost_usd.toFixed(4)}</span>.
+            {latestBatch.halted_reason && (
+              <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                {latestBatch.halted_reason}
+              </div>
+            )}
+          </section>
+        )}
+
         {/* Dominant Asset Preview Stage */}
         {activeAsset ? (
           <section className="panel" aria-label="Generated Asset Stage">
@@ -550,6 +665,37 @@ export const WorkspaceView: React.FC<Props> = ({
               )}
             </div>
 
+            {/* Phase 2: Variation Contact Sheet when multiple image variations share this plan */}
+            {variationSiblings.length > 1 && (
+              <div className="subpanel" aria-label="Variation Contact Sheet">
+                <div className="section-head">
+                  <h3>Variation Contact Sheet ({variationSiblings.length} outputs for this plan)</h3>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => onOpenCompare(variationSiblings[0].id, variationSiblings[variationSiblings.length - 1].id)}
+                  >
+                    Compare First &amp; Last Variation
+                  </button>
+                </div>
+                <div className="variation-strip">
+                  {variationSiblings.map((vAsset, idx) => (
+                    <button
+                      key={vAsset.id}
+                      type="button"
+                      className={`variation-thumb ${vAsset.id === activeAsset.id ? "active" : ""}`}
+                      onClick={() => selectAsset(vAsset)}
+                    >
+                      <img src={`/api/assets/${vAsset.id}/file`} alt={`Variation ${idx + 1} (${vAsset.filename})`} />
+                      <span className="small-mono">
+                        Var {idx + 1} · v{String(vAsset.version_number).padStart(2, "0")}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Asset Metadata & Organization Bar */}
             <div className="form-grid-3" style={{ alignItems: "end" }}>
               <div className="field">
@@ -606,6 +752,7 @@ export const WorkspaceView: React.FC<Props> = ({
           <PlanView
             plan={activePlan}
             onSaveEdits={handleSavePlanEdits}
+            onSaveVideoEdits={handleSaveVideoPlanEdits}
             onApplyDefaultField={(field, val) => {
               if (field === "environment") setEnvironment(val);
               if (field === "aspect_ratio") setAspectRatio(val);
@@ -614,7 +761,16 @@ export const WorkspaceView: React.FC<Props> = ({
         )}
 
         {/* Advisory Quality Review */}
-        {activeReview && <QualityPanel review={activeReview} onFeedback={handleFeedback} />}
+        {activeReview && (
+          <QualityPanel
+            review={activeReview}
+            onFeedback={handleFeedback}
+            onVisionQCComplete={async (upgraded) => {
+              setActiveReview(upgraded);
+              await onRefreshGlobal();
+            }}
+          />
+        )}
       </main>
 
       {/* Zone 3: Right Production Brief, Reference Upload, Execution Approval & Targeted Revision Inspector */}
@@ -831,12 +987,28 @@ export const WorkspaceView: React.FC<Props> = ({
           )}
         </div>
 
-        {/* Execution Approval Action */}
+        {/* Execution Approval Action (Single or Multi-Output Image Variations) */}
         <div className="subpanel" style={{ borderColor: "var(--accent-border)" }}>
           <h3>Generation Execution Gate</h3>
           <p className="muted" style={{ margin: 0, fontSize: 12 }}>
-            Review exact provider, model, output parameters, and spend guard status before submitting.
+            Review exact provider, model, output count, and spend guard status before submitting.
           </p>
+          {activePlan?.media_type === "image" && (
+            <div className="field">
+              <label htmlFor="variation-count-select">Image Output Variations (1–4)</label>
+              <select
+                id="variation-count-select"
+                className="select mono"
+                value={variationCount}
+                onChange={(e) => setVariationCount(Number(e.target.value) || 1)}
+              >
+                <option value={1}>1 output (Single Hero Render)</option>
+                <option value={2}>2 variations (Side-by-Side Options)</option>
+                <option value={3}>3 variations (Triplet Contact Sheet)</option>
+                <option value={4}>4 variations (Quad Contact Sheet)</option>
+              </select>
+            </div>
+          )}
           <button
             id="review-approval-btn"
             type="button"
@@ -844,9 +1016,102 @@ export const WorkspaceView: React.FC<Props> = ({
             disabled={!activePlan || busyAction !== null}
             onClick={handleRequestQuote}
           >
-            {busyAction === "quoting" ? "Preparing Quote..." : "Review Quote & Approve Generation"}
+            {busyAction === "quoting"
+              ? "Preparing Quote..."
+              : activePlan?.media_type === "image" && variationCount > 1
+                ? `Review Quote & Approve ${variationCount} Variations`
+                : "Review Quote & Approve Generation"}
           </button>
         </div>
+
+        {/* Phase 2: Multi-Turn Video Extension Panel (3–10s per turn, up to 30s cumulative) */}
+        {activeAsset && activeAsset.media_type === "video" && (activeAsset.duration_s ?? 0) <= 27 && (
+          <form className="subpanel" onSubmit={handleCreateVideoExtension} aria-label="Multi-Turn Video Extension">
+            <h3>Multi-Turn Video Extension</h3>
+            <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+              Extend <span className="mono">v{String(activeAsset.version_number).padStart(2, "0")}</span> (
+              {(activeAsset.duration_s ?? 0).toFixed(1)}s) by +3–10s (max 30s cumulative) inheriting continuity invariants
+              and prior provider interaction lineage.
+            </p>
+            <div className="field">
+              <label htmlFor="extend-duration-input">Extension Segment Duration (3–10s)</label>
+              <input
+                id="extend-duration-input"
+                type="number"
+                min={3}
+                max={Math.min(10, Math.max(3, Math.floor(30 - (activeAsset.duration_s ?? 0))))}
+                step={1}
+                className="input mono"
+                value={extensionDurationS}
+                onChange={(e) => setExtensionDurationS(Number(e.target.value) || 4)}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="extend-prompt-input">Continuation Beat Action</label>
+              <input
+                id="extend-prompt-input"
+                className="input"
+                value={extensionPrompt}
+                onChange={(e) => setExtensionPrompt(e.target.value)}
+                placeholder="e.g. Camera settles gently onto embossed coffee lid as steam curls upward"
+              />
+            </div>
+            <button
+              id="create-extension-plan-btn"
+              type="submit"
+              className="btn btn-sm"
+              disabled={!extensionPrompt.trim() || busyAction === "extending"}
+            >
+              {busyAction === "extending" ? "Building Extension Plan..." : `Build +${extensionDurationS}s Video Extension Plan`}
+            </button>
+          </form>
+        )}
+
+        {/* Phase 2: Batch Generation with Combined Cost Approval */}
+        {workspace && workspace.plans.length >= 2 && (
+          <details className="subpanel" open={selectedBatchPlanIds.length > 0}>
+            <summary style={{ cursor: "pointer", fontWeight: 600, fontSize: 13 }}>
+              Batch Generation ({workspace.plans.length} plans available)
+            </summary>
+            <p className="muted" style={{ margin: "6px 0 0", fontSize: 12 }}>
+              Select multiple plans in this project to review one combined cost quote and approve together.
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 6 }}>
+              {workspace.plans.slice(0, 8).map((p) => {
+                const checked = selectedBatchPlanIds.includes(p.id);
+                return (
+                  <label key={p.id} style={{ display: "flex", alignItems: "flex-start", gap: 6, fontSize: 12 }}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) =>
+                        setSelectedBatchPlanIds((prev) =>
+                          e.target.checked ? [...prev, p.id] : prev.filter((id) => id !== p.id),
+                        )
+                      }
+                      style={{ marginTop: 2 }}
+                    />
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                      <strong className="mono">v{p.version} · {p.media_type}</strong> — {p.summary.slice(0, 56)}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            <button
+              id="review-batch-quote-btn"
+              type="button"
+              className="btn btn-sm"
+              style={{ marginTop: 8 }}
+              disabled={selectedBatchPlanIds.length === 0 || busyAction !== null}
+              onClick={handleRequestBatchQuote}
+            >
+              {busyAction === "batch-quoting"
+                ? "Computing Combined Cost..."
+                : `Review Combined Batch Quote (${selectedBatchPlanIds.length})`}
+            </button>
+          </details>
+        )}
 
         {/* Controlled Targeted Revision Panel */}
         {activePlan && (
@@ -891,11 +1156,15 @@ export const WorkspaceView: React.FC<Props> = ({
         )}
       </aside>
 
-      {pendingQuote && (
+      {(pendingQuote || pendingBatchQuote) && (
         <ApprovalModal
           quote={pendingQuote}
+          batchQuote={pendingBatchQuote}
           submitting={busyAction === "generating"}
-          onCancel={() => setPendingQuote(null)}
+          onCancel={() => {
+            setPendingQuote(null);
+            setPendingBatchQuote(null);
+          }}
           onConfirm={handleConfirmGenerate}
         />
       )}

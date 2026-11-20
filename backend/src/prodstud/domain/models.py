@@ -144,6 +144,9 @@ class VideoSequencePlan(BaseModel):
     feasibility_status: str  # "feasible" | "requires_alternative"
     feasibility_notes: list[str] = Field(default_factory=list)
     alternative_proposals: list[str] = Field(default_factory=list)
+    extended_from_asset_id: str | None = None
+    extension_duration_s: float | None = None
+    source_provider_job_id: str | None = None
 
 
 class ImagePlanDetails(BaseModel):
@@ -250,9 +253,11 @@ class ApprovalQuote(BaseModel):
     provider_id: str
     model_id: str
     media_type: MediaType
+    variation_count: int = 1
     is_billable: bool
     is_local_test_fixture: bool
-    estimated_cost_usd: float | None
+    unit_estimated_cost_usd: float | None = None
+    estimated_cost_usd: float | None  # Total estimated cost (unit * variation_count)
     pricing_disclosure: str
     user_daily_spend_cap_usd: float
     user_spent_today_usd: float
@@ -262,6 +267,85 @@ class ApprovalQuote(BaseModel):
     credential_reason: str
     settings_summary: dict[str, Any]
     feasibility_warnings: list[str]
+    previous_provider_job_id: str | None = None
+    confirmation_token: str
+    expires_at: str
+
+
+class BatchQuoteItem(BaseModel):
+    plan_id: str
+    plan_summary: str
+    media_type: MediaType
+    provider_id: str
+    model_id: str
+    variation_count: int = 1
+    is_billable: bool
+    is_local_test_fixture: bool
+    unit_estimated_cost_usd: float | None = None
+    subtotal_estimated_cost_usd: float | None = None
+    pricing_disclosure: str
+    validation_errors: list[str] = Field(default_factory=list)
+    settings_summary: dict[str, Any] = Field(default_factory=dict)
+
+
+class BatchApprovalQuote(BaseModel):
+    batch_quote_id: str
+    project_id: str
+    items: list[BatchQuoteItem]
+    total_requested_outputs: int
+    has_billable_items: bool
+    has_dynamic_pricing_items: bool
+    total_estimated_cost_usd: float | None
+    user_daily_spend_cap_usd: float
+    user_spent_today_usd: float
+    spend_guard_allows: bool
+    spend_guard_reason: str
+    credential_ready: bool
+    credential_reason: str
+    feasibility_warnings: list[str] = Field(default_factory=list)
+    confirmation_token: str
+    expires_at: str
+
+
+class BatchExecutionRecord(BaseModel):
+    batch_id: str
+    project_id: str
+    batch_quote_id: str
+    status: str  # completed | partial_halted | failed | unknown_halted
+    total_requested_outputs: int
+    completed_outputs: int
+    failed_outputs: int
+    halted_reason: str | None = None
+    job_ids: list[str] = Field(default_factory=list)
+    asset_ids: list[str] = Field(default_factory=list)
+    total_recorded_cost_usd: float = 0.0
+    created_at: str
+    updated_at: str
+
+
+class VideoExtensionRequest(BaseModel):
+    continuation_prompt: str = Field(..., min_length=4, max_length=2000)
+    extension_duration_s: float = Field(default=6.0, ge=3.0, le=10.0)
+    provider_id: str | None = None
+    model_id: str | None = None
+
+
+class VisionQCQuote(BaseModel):
+    quote_id: str
+    asset_id: str
+    provider_id: str
+    model_id: str
+    is_billable: bool
+    estimated_cost_usd: float
+    pricing_disclosure: str
+    frames_to_inspect: int
+    includes_source_comparison: bool
+    user_daily_spend_cap_usd: float
+    user_spent_today_usd: float
+    spend_guard_allows: bool
+    spend_guard_reason: str
+    credential_ready: bool
+    credential_reason: str
     confirmation_token: str
     expires_at: str
 

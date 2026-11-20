@@ -13,6 +13,8 @@ from prodstud.domain.enums import ErrorCategory, MediaType
 from prodstud.domain.models import (
     ApprovalQuote,
     AuditEventRecord,
+    BatchApprovalQuote,
+    BatchExecutionRecord,
     BriefInput,
     ImagePlanDetails,
     ProductionPlanRecord,
@@ -20,12 +22,15 @@ from prodstud.domain.models import (
     QualityReviewRecord,
     RevisionRequest,
     UserProfile,
+    VideoExtensionRequest,
     VideoSequencePlan,
+    VisionQCQuote,
 )
 from prodstud.engine.revision_engine import apply_targeted_revision
+from prodstud.engine.video_planner import build_video_extension_plan, revalidate_plan_against_capability
 from prodstud.providers.base import ProviderAdapterError
 from prodstud.runtime import AppRuntime
-from prodstud.security import redact_secrets
+from prodstud.security import redact_secrets, sanitize_download_filename
 
 router = APIRouter(tags=["production_workflow"])
 
@@ -41,6 +46,7 @@ class PlanUpdatePayload(BaseModel):
 class QuoteRequestPayload(BaseModel):
     provider_id: str | None = None
     model_id: str | None = None
+    variation_count: int = Field(default=1, ge=1, le=4)
 
 
 class GenerateSubmitPayload(BaseModel):
@@ -52,6 +58,29 @@ class GenerateSubmitPayload(BaseModel):
     run_async: bool = False
 
 
+class BatchItemInput(BaseModel):
+    plan_id: str
+    provider_id: str | None = None
+    model_id: str | None = None
+    variation_count: int = Field(default=1, ge=1, le=4)
+
+
+class BatchQuoteRequestPayload(BaseModel):
+    items: list[BatchItemInput] = Field(..., min_length=1, max_length=12)
+
+
+class BatchExecutePayload(BaseModel):
+    batch_quote_id: str
+    confirmation_token: str
+    explicit_user_confirmed: bool
+
+
+class VisionQCRunPayload(BaseModel):
+    quote_id: str
+    confirmation_token: str
+    explicit_user_confirmed: bool
+
+
 class HumanFeedbackPayload(BaseModel):
     status: str = Field(..., pattern="^(accepted|rejected|needs_rework)$")
     note: str = Field(default="", max_length=1500)
@@ -59,6 +88,41 @@ class HumanFeedbackPayload(BaseModel):
 
 class BulkExportPayload(BaseModel):
     asset_ids: list[str] = Field(..., min_length=1, max_length=50)
+
+
+def _provider_error_to_http(exc: ProviderAdapterError) -> HTTPException:
+    status_code = (
+        402
+        if exc.category == ErrorCategory.SPEND_GUARD
+        else 403
+        if exc.category in {ErrorCategory.APPROVAL_REQUIRED, ErrorCategory.PROVIDER_AUTH}
+        else 400
+    )
+    return HTTPException(
+        status_code=status_code,
+        detail={"category": exc.category.value, "message": redact_secrets(str(exc))},
+    )
+
+
+def _refresh_plan_feasibility(rt: AppRuntime, user_id: str, plan: ProductionPlanRecord) -> None:
+    try:
+        cap = rt.providers.resolve_capability(plan.media_type, plan.recommended_provider, plan.recommended_model)
+    except ValueError as exc:
+        plan.feasibility_ok = False
+        plan.feasibility_warnings = [str(exc)]
+        return
+    brief_payload = rt.repo.get_brief_payload(user_id, plan.brief_id) or {}
+    ref_ids = brief_payload.get("reference_ids") or []
+    ref_rows = rt.repo.get_reference_rows(user_id, plan.project_id, ref_ids)
+    has_start_end = any(r["role"] == "start_frame" for r in ref_rows) and any(r["role"] == "end_frame" for r in ref_rows)
+    ok, warnings = revalidate_plan_against_capability(
+        plan,
+        cap,
+        ref_count=len(ref_rows),
+        has_start_and_end_refs=has_start_end,
+    )
+    plan.feasibility_ok = ok
+    plan.feasibility_warnings = warnings
 
 
 @router.get("/api/capabilities")
@@ -178,7 +242,8 @@ def edit_plan(
         plan.recommended_provider = payload.recommended_provider
     if payload.recommended_model is not None:
         plan.recommended_model = payload.recommended_model
-    # Any edit requires fresh generation approval
+    # Re-validate feasibility immediately after edit and require fresh generation approval
+    _refresh_plan_feasibility(rt, user.id, plan)
     plan.approved_for_generation = False
     updated = rt.repo.update_plan(user.id, plan)
     rt.repo.record_audit(
@@ -187,7 +252,7 @@ def edit_plan(
         event_type="production_plan_edited",
         entity_type="production_plan",
         entity_id=plan.id,
-        payload={"version": plan.version},
+        payload={"version": plan.version, "feasibility_ok": plan.feasibility_ok},
     )
     return updated
 
@@ -208,6 +273,7 @@ def create_approval_quote(
             plan=plan,
             provider_id=payload.provider_id,
             model_id=payload.model_id,
+            variation_count=payload.variation_count,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -224,7 +290,7 @@ def submit_generation(
     if not plan:
         raise HTTPException(status_code=404, detail="Production plan not found.")
     try:
-        job, asset, review = rt.jobs.submit_approved_job(
+        jobs, assets, reviews = rt.jobs.submit_approved_variations(
             user=user,
             plan=plan,
             quote_id=payload.quote_id,
@@ -235,23 +301,133 @@ def submit_generation(
             run_async=payload.run_async,
         )
     except ProviderAdapterError as exc:
-        status_code = (
-            402
-            if exc.category == ErrorCategory.SPEND_GUARD
-            else 403
-            if exc.category in {ErrorCategory.APPROVAL_REQUIRED, ErrorCategory.PROVIDER_AUTH}
-            else 400
-        )
-        raise HTTPException(
-            status_code=status_code,
-            detail={"category": exc.category.value, "message": redact_secrets(str(exc))},
-        ) from exc
+        raise _provider_error_to_http(exc) from exc
 
     return {
-        "job": job.model_dump(),
-        "asset": asset.model_dump() if asset else None,
-        "quality_review": review.model_dump() if review else None,
+        "job": jobs[0].model_dump(),
+        "asset": assets[0].model_dump() if assets else None,
+        "quality_review": reviews[0].model_dump() if reviews else None,
+        "jobs": [j.model_dump() for j in jobs],
+        "assets": [a.model_dump() for a in assets],
+        "quality_reviews": [r.model_dump() for r in reviews],
     }
+
+
+@router.post("/api/projects/{project_id}/batches/quote")
+def create_batch_approval_quote(
+    project_id: str,
+    payload: BatchQuoteRequestPayload,
+    user: UserProfile = Depends(get_current_user),
+    rt: AppRuntime = Depends(get_runtime),
+) -> BatchApprovalQuote:
+    if not rt.repo.get_project(user.id, project_id):
+        raise HTTPException(status_code=404, detail="Project not found.")
+    try:
+        return rt.jobs.request_batch_quote(
+            user=user,
+            project_id=project_id,
+            items=[it.model_dump() for it in payload.items],
+        )
+    except ProviderAdapterError as exc:
+        raise _provider_error_to_http(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/api/projects/{project_id}/batches/execute")
+def execute_approved_batch(
+    project_id: str,
+    payload: BatchExecutePayload,
+    user: UserProfile = Depends(get_current_user),
+    rt: AppRuntime = Depends(get_runtime),
+) -> dict[str, Any]:
+    if not rt.repo.get_project(user.id, project_id):
+        raise HTTPException(status_code=404, detail="Project not found.")
+    try:
+        batch, jobs, assets, reviews = rt.jobs.submit_approved_batch(
+            user=user,
+            project_id=project_id,
+            batch_quote_id=payload.batch_quote_id,
+            confirmation_token=payload.confirmation_token,
+            explicit_user_confirmed=payload.explicit_user_confirmed,
+        )
+    except ProviderAdapterError as exc:
+        raise _provider_error_to_http(exc) from exc
+    return {
+        "batch": batch.model_dump(),
+        "jobs": [j.model_dump() for j in jobs],
+        "assets": [a.model_dump() for a in assets],
+        "quality_reviews": [r.model_dump() for r in reviews],
+    }
+
+
+@router.get("/api/projects/{project_id}/batches")
+def list_project_batches(
+    project_id: str,
+    user: UserProfile = Depends(get_current_user),
+    rt: AppRuntime = Depends(get_runtime),
+) -> list[BatchExecutionRecord]:
+    if not rt.repo.get_project(user.id, project_id):
+        raise HTTPException(status_code=404, detail="Project not found.")
+    return rt.repo.list_batches(user.id, project_id)
+
+
+@router.post("/api/assets/{asset_id}/extend", status_code=201)
+def create_video_extension_plan(
+    asset_id: str,
+    payload: VideoExtensionRequest,
+    user: UserProfile = Depends(get_current_user),
+    rt: AppRuntime = Depends(get_runtime),
+) -> ProductionPlanRecord:
+    source_asset = rt.repo.get_asset(user.id, asset_id)
+    if not source_asset:
+        raise HTTPException(status_code=404, detail="Source video asset not found.")
+    if source_asset.media_type != MediaType.VIDEO:
+        raise HTTPException(status_code=400, detail="Video extension is only supported for generated video assets.")
+    source_plan = rt.repo.get_plan(user.id, source_asset.plan_id)
+    if not source_plan:
+        raise HTTPException(status_code=404, detail="Source video production plan not found.")
+
+    try:
+        cap = rt.providers.resolve_capability(
+            MediaType.VIDEO,
+            payload.provider_id or source_asset.provider_id,
+            payload.model_id or source_asset.model_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    source_job = rt.repo.get_job(user.id, source_asset.job_id)
+    pjid = source_job.provider_job_id if source_job else None
+
+    try:
+        ext_plan = build_video_extension_plan(
+            source_plan=source_plan,
+            source_asset=source_asset,
+            continuation_prompt=payload.continuation_prompt,
+            extension_duration_s=payload.extension_duration_s,
+            capability=cap,
+            source_provider_job_id=pjid,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    rt.repo.save_plan(user.id, ext_plan)
+    rt.repo.record_audit(
+        user_id=user.id,
+        project_id=source_asset.project_id,
+        event_type="video_extension_plan_created",
+        entity_type="production_plan",
+        entity_id=ext_plan.id,
+        payload={
+            "source_asset_id": source_asset.id,
+            "source_plan_id": source_plan.id,
+            "extension_duration_s": payload.extension_duration_s,
+            "total_duration_s": ext_plan.video_plan.total_duration_s if ext_plan.video_plan else None,
+            "feasibility_ok": ext_plan.feasibility_ok,
+        },
+    )
+    return ext_plan
 
 
 @router.get("/api/jobs/{job_id}")
@@ -314,11 +490,12 @@ def get_asset_file(
         raise HTTPException(status_code=404, detail="Generated asset not found.")
     full_path = rt.store.resolve(row["storage_relpath"])
     disposition = "attachment" if download else "inline"
+    safe_name = sanitize_download_filename(row["filename"])
     return FileResponse(
         full_path,
         media_type=row["mime_type"],
-        filename=row["filename"],
-        headers={"Content-Disposition": f'{disposition}; filename="{row["filename"]}"'},
+        filename=safe_name,
+        headers={"Content-Disposition": f'{disposition}; filename="{safe_name}"'},
     )
 
 
@@ -388,7 +565,7 @@ def export_asset_package(
         entity_id=asset_id,
         payload={"filename": row["filename"]},
     )
-    pkg_name = f"{row['filename'].rsplit('.', 1)[0]}_export.zip"
+    pkg_name = sanitize_download_filename(f"{row['filename'].rsplit('.', 1)[0]}_export.zip", fallback="asset_export.zip")
     return Response(
         content=zip_bytes,
         media_type="application/zip",
@@ -422,10 +599,11 @@ def export_bulk_package(
         entity_id=project_id,
         payload={"count": len(items)},
     )
+    safe_pkg = sanitize_download_filename(f"prodstud_{project_id}_bulk_export.zip", fallback="bulk_export.zip")
     return Response(
         content=zip_bytes,
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="prodstud_{project_id}_bulk_export.zip"'},
+        headers={"Content-Disposition": f'attachment; filename="{safe_pkg}"'},
     )
 
 
@@ -439,6 +617,50 @@ def get_asset_review(
     if not review:
         raise HTTPException(status_code=404, detail="Quality review not found for this asset.")
     return review
+
+
+@router.get("/api/assets/{asset_id}/reviews")
+def list_asset_reviews(
+    asset_id: str,
+    user: UserProfile = Depends(get_current_user),
+    rt: AppRuntime = Depends(get_runtime),
+) -> list[QualityReviewRecord]:
+    if not rt.repo.get_asset(user.id, asset_id):
+        raise HTTPException(status_code=404, detail="Generated asset not found.")
+    return rt.repo.list_quality_reviews(user.id, asset_id)
+
+
+@router.post("/api/assets/{asset_id}/review/vision/quote")
+def create_vision_qc_quote(
+    asset_id: str,
+    user: UserProfile = Depends(get_current_user),
+    rt: AppRuntime = Depends(get_runtime),
+) -> VisionQCQuote:
+    try:
+        return rt.jobs.request_vision_qc_quote(user=user, asset_id=asset_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/api/assets/{asset_id}/review/vision/run")
+def run_vision_qc(
+    asset_id: str,
+    payload: VisionQCRunPayload,
+    user: UserProfile = Depends(get_current_user),
+    rt: AppRuntime = Depends(get_runtime),
+) -> QualityReviewRecord:
+    try:
+        return rt.jobs.run_approved_vision_qc(
+            user=user,
+            asset_id=asset_id,
+            quote_id=payload.quote_id,
+            confirmation_token=payload.confirmation_token,
+            explicit_user_confirmed=payload.explicit_user_confirmed,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ProviderAdapterError as exc:
+        raise _provider_error_to_http(exc) from exc
 
 
 @router.post("/api/reviews/{review_id}/feedback")
@@ -486,6 +708,7 @@ def revise_plan(
         source_asset_id=source_asset_id,
         capability=cap,
     )
+    _refresh_plan_feasibility(rt, user.id, new_plan)
     rt.repo.save_plan(user.id, new_plan)
     rt.repo.save_revision(user.id, revision)
     rt.repo.record_audit(
@@ -499,6 +722,7 @@ def revise_plan(
             "new_plan_id": new_plan.id,
             "changed_fields": revision.changed_fields,
             "preserved_count": len(revision.preserved_fields),
+            "feasibility_ok": new_plan.feasibility_ok,
         },
     )
     return {"plan": new_plan.model_dump(), "revision": revision.model_dump()}
@@ -530,7 +754,7 @@ def compare_assets(
     elif left_plan and right_plan and left_plan.video_plan and right_plan.video_plan:
         ld = left_plan.video_plan.model_dump()
         rd = right_plan.video_plan.model_dump()
-        for k in ("total_duration_s", "aspect_ratio", "resolution", "shots"):
+        for k in ("total_duration_s", "aspect_ratio", "resolution", "extension_duration_s", "shots"):
             if ld.get(k) != rd.get(k):
                 diffs.append({"field": k, "left": ld.get(k), "right": rd.get(k)})
 

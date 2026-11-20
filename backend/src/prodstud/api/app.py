@@ -51,6 +51,12 @@ def create_app(settings: Settings | None = None, frontend_dist: Path | None = No
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "same-origin"
+        if not request.url.path.startswith("/api/docs"):
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; "
+                "style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; "
+                "frame-ancestors 'none'; base-uri 'self';"
+            )
         if request.url.path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"
         return response

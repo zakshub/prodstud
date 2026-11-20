@@ -1,6 +1,6 @@
 {
-  "updated_at": "2026-11-19",
-  "overall_verified_pct": 40.9,
+  "updated_at": "2026-11-20",
+  "overall_verified_pct": 44.2,
   "phases": [
     {
       "id": "phase_0",
@@ -21,11 +21,11 @@
       "status": "verified",
       "verified_pct": 100.0,
       "tasks": [
-        { "id": "P1-1", "title": "Single-user auth, SQLite WAL + integrity checks + atomic snapshots", "weight": 3, "status": "verified" },
+        { "id": "P1-1", "title": "Single-user auth (incl. server-side logout revocation & CSP), SQLite WAL + integrity checks + atomic snapshots", "weight": 3, "status": "verified" },
         { "id": "P1-2", "title": "Server-side Fernet API key vault, log redaction, $0.00 spend guard", "weight": 3, "status": "verified" },
-        { "id": "P1-3", "title": "Projects CRUD, rename, archive/reopen, reference uploads with validation", "weight": 2, "status": "verified" },
-        { "id": "P1-4", "title": "Provider-independent Production Intelligence Engine (Image & Dedicated Video Shot Planner)", "weight": 4, "status": "verified" },
-        { "id": "P1-5", "title": "Verified Google Image (Nano Banana 2.1) & Video (Omni 1.2 Flash) adapters + local dev fixture", "weight": 4, "status": "verified" },
+        { "id": "P1-3", "title": "Projects CRUD, rename, archive/reopen, reference uploads with validation & sanitized downloads", "weight": 2, "status": "verified" },
+        { "id": "P1-4", "title": "Provider-independent Production Intelligence Engine (Image & Dedicated Video Shot Planner with edit/revision re-validation)", "weight": 4, "status": "verified" },
+        { "id": "P1-5", "title": "Google Image (Nano Banana 2.1) & Video (Omni 1.2 Flash) adapters (contract-tested via mocked HTTP) + local dev fixture", "weight": 4, "status": "verified" },
         { "id": "P1-6", "title": "Explicit approval quote/modal, safe job states incl. unknown, zero blind retries", "weight": 3, "status": "verified" },
         { "id": "P1-7", "title": "Advisory quality review (Pillow/FFprobe), targeted revision, asset preview & sanitized export", "weight": 3, "status": "verified" },
         { "id": "P1-8", "title": "Level 1 CLI & Level 2 Asset-First Web Workspace (Dark & Light companion modes)", "weight": 3, "status": "verified" }
@@ -35,14 +35,16 @@
       "id": "phase_2",
       "name": "Phase 2: Production Studio V1 (Level 3 Advanced Production Workspace)",
       "status": "in_progress",
-      "verified_pct": 66.7,
+      "verified_pct": 83.3,
       "tasks": [
         { "id": "P2-1", "title": "Full 170-protocol registry explorer & per-plan activation trace", "weight": 2, "status": "verified" },
         { "id": "P2-2", "title": "Reusable production templates & reference role classification", "weight": 2, "status": "verified" },
         { "id": "P2-3", "title": "Asset search, tags, collections, favorites, side-by-side version comparison & bulk ZIP export", "weight": 3, "status": "verified" },
         { "id": "P2-4", "title": "Human QC review feedback & representative brief regression test suite", "weight": 3, "status": "verified" },
-        { "id": "P2-5", "title": "Live multi-output variations, batch generation approval & video extension execution", "weight": 3, "status": "planned" },
-        { "id": "P2-6", "title": "Full manual PDF page-by-page verification & timestamped multimodal vision QC", "weight": 2, "status": "planned" }
+        { "id": "P2-5", "title": "Multi-output image variations (1-4 + contact sheet), batch generation combined cost approval, & multi-turn video extension (3-10s, up to 30s)", "weight": 3, "status": "verified" },
+        { "id": "P2-6", "title": "Optional multimodal Vision QC (explicitly gated + mocked verification) & 170-Protocol Manual page verifier tooling", "weight": 2, "status": "verified" },
+        { "id": "P2-7", "title": "Controlled live Google Image + Video smoke test execution (awaiting owner GEMINI_API_KEY & explicit spend authorization)", "weight": 2, "status": "blocked_external" },
+        { "id": "P2-8", "title": "Original 170-Protocol Manual PDF page-by-page source audit (awaiting owner source PDF upload)", "weight": 1, "status": "blocked_external" }
       ]
     },
     {

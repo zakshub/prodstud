@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from prodstud.config import Settings
 from prodstud.engine.orchestrator import ProductionIntelligenceEngine
 from prodstud.engine.protocol_registry import ProtocolRegistry
+from prodstud.engine.vision_qc import VisionQCService
 from prodstud.jobs.runner import JobService
 from prodstud.providers.policy_gate import PolicyEvaluationGate
 from prodstud.providers.registry import ProviderRegistry
@@ -29,6 +30,7 @@ class AppRuntime:
     engine: ProductionIntelligenceEngine
     providers: ProviderRegistry
     policy_gate: PolicyEvaluationGate
+    vision_qc: VisionQCService
     jobs: JobService
 
     @classmethod
@@ -50,12 +52,14 @@ class AppRuntime:
         engine = ProductionIntelligenceEngine(protocols)
         providers = ProviderRegistry(enable_local_fixture=cfg.enable_local_fixture)
         policy_gate = PolicyEvaluationGate(signer)
+        vision_qc = VisionQCService()
         jobs = JobService(
             repo=repo,
             store=store,
             vault=vault,
             providers=providers,
             policy_gate=policy_gate,
+            vision_qc=vision_qc,
         )
         return cls(
             settings=cfg,
@@ -68,5 +72,6 @@ class AppRuntime:
             engine=engine,
             providers=providers,
             policy_gate=policy_gate,
+            vision_qc=vision_qc,
             jobs=jobs,
         )

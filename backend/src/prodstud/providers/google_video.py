@@ -33,18 +33,37 @@ def _compile_google_video_directive(plan: ProductionPlanRecord) -> str:
     """Translate timed VideoSequencePlan (shots, camera moves, continuity, transitions) inside adapter boundary."""
     vp = plan.video_plan
     assert vp is not None
-    lines = [
-        f"SEQUENCE INTENT: {vp.sequence_intent}",
-        f"FORMAT: {vp.total_duration_s}s total, {vp.fps} FPS, {vp.aspect_ratio} ({vp.resolution}).",
-        "TIMED SHOT LIST:",
-    ]
-    for s in vp.shots:
-        lines.append(
-            f"- {s.shot_id} [{s.start_s:.1f}s–{s.end_s:.1f}s, {s.duration_s:.1f}s]: "
-            f"Framing: {s.framing} ({s.lens_focal_mm}mm). Action: {s.subject_action}. "
-            f"Camera Movement: {s.camera_movement}. Lighting: {s.lighting_continuity}. "
-            f"Environment: {s.environment_continuity}. Transition out: {s.transition_out}."
-        )
+    is_extension = vp.extended_from_asset_id is not None and vp.extension_duration_s is not None
+    if is_extension:
+        # Focus continuation directive on newly appended tail shots while anchoring full continuity invariants
+        seam_s = round(max(0.0, vp.total_duration_s - float(vp.extension_duration_s or 0.0)), 1)
+        tail_shots = [s for s in vp.shots if s.start_s >= seam_s - 0.15] or vp.shots[-1:]
+        lines = [
+            f"MULTI-TURN VIDEO EXTENSION (+{vp.extension_duration_s:.1f}s continuation from {seam_s:.1f}s -> {vp.total_duration_s:.1f}s total)",
+            f"SEQUENCE INTENT: {vp.sequence_intent}",
+            f"FORMAT: {vp.extension_duration_s:.1f}s extension turn, {vp.fps} FPS, {vp.aspect_ratio} ({vp.resolution}).",
+            "CONTINUATION SHOT LIST (SEAMLESSLY CONTINUE FROM CLOSING FRAME OF PRIOR TURN):",
+        ]
+        for s in tail_shots:
+            lines.append(
+                f"- {s.shot_id} [{s.start_s:.1f}s–{s.end_s:.1f}s, {s.duration_s:.1f}s]: "
+                f"Framing: {s.framing} ({s.lens_focal_mm}mm). Action: {s.subject_action}. "
+                f"Camera Movement: {s.camera_movement}. Lighting: {s.lighting_continuity}. "
+                f"Environment: {s.environment_continuity}. Transition out: {s.transition_out}."
+            )
+    else:
+        lines = [
+            f"SEQUENCE INTENT: {vp.sequence_intent}",
+            f"FORMAT: {vp.total_duration_s}s total, {vp.fps} FPS, {vp.aspect_ratio} ({vp.resolution}).",
+            "TIMED SHOT LIST:",
+        ]
+        for s in vp.shots:
+            lines.append(
+                f"- {s.shot_id} [{s.start_s:.1f}s–{s.end_s:.1f}s, {s.duration_s:.1f}s]: "
+                f"Framing: {s.framing} ({s.lens_focal_mm}mm). Action: {s.subject_action}. "
+                f"Camera Movement: {s.camera_movement}. Lighting: {s.lighting_continuity}. "
+                f"Environment: {s.environment_continuity}. Transition out: {s.transition_out}."
+            )
     if vp.continuity_invariants:
         lines.append("CONTINUITY INVARIANTS (PRESERVE ACROSS ALL SHOTS): " + " | ".join(vp.continuity_invariants))
     return "\n".join(lines)
@@ -163,14 +182,28 @@ class GoogleVideoAdapter(VideoProviderAdapter):
         if plan.media_type != MediaType.VIDEO or not plan.video_plan:
             return ["GoogleVideoAdapter only accepts timed Video production plans."]
         vp = plan.video_plan
+        is_extension = vp.extended_from_asset_id is not None or vp.extension_duration_s is not None
         if vp.aspect_ratio not in cap.supported_aspect_ratios:
             errors.append(f"Aspect ratio '{vp.aspect_ratio}' unsupported by {model_id}.")
         if vp.resolution not in cap.supported_resolutions:
             errors.append(f"Resolution '{vp.resolution}' unsupported by {model_id}.")
-        if cap.min_duration_s and vp.total_duration_s < cap.min_duration_s:
-            errors.append(f"Duration {vp.total_duration_s}s is below minimum {cap.min_duration_s}s for {model_id}.")
-        if cap.max_duration_s and vp.total_duration_s > cap.max_duration_s:
-            errors.append(f"Duration {vp.total_duration_s}s exceeds single-clip maximum {cap.max_duration_s}s for {model_id}.")
+        if is_extension:
+            if not cap.supports_video_extension:
+                errors.append(f"Model '{model_id}' does not support multi-turn video extension.")
+            ext_dur = float(vp.extension_duration_s or 0.0)
+            if not (3.0 <= ext_dur <= 10.0):
+                errors.append(f"Extension duration {ext_dur:.1f}s must be between 3s and 10s for {model_id}.")
+            if vp.total_duration_s > 30.0:
+                errors.append(f"Cumulative extended duration {vp.total_duration_s:.1f}s exceeds 30s multi-turn ceiling for {model_id}.")
+            if not vp.source_provider_job_id:
+                errors.append(
+                    f"Multi-turn extension on {model_id} requires a source Google previous_interaction_id from a prior Google video job."
+                )
+        else:
+            if cap.min_duration_s and vp.total_duration_s < cap.min_duration_s:
+                errors.append(f"Duration {vp.total_duration_s}s is below minimum {cap.min_duration_s}s for {model_id}.")
+            if cap.max_duration_s and vp.total_duration_s > cap.max_duration_s:
+                errors.append(f"Duration {vp.total_duration_s}s exceeds single-clip maximum {cap.max_duration_s}s for {model_id}.")
         if len(references) > cap.max_reference_images:
             errors.append(f"{len(references)} references exceed {model_id} maximum of {cap.max_reference_images}.")
         return errors
@@ -210,6 +243,9 @@ class GoogleVideoAdapter(VideoProviderAdapter):
 
         assert plan.video_plan is not None
         vp = plan.video_plan
+        is_extension = vp.extended_from_asset_id is not None and vp.extension_duration_s is not None
+        turn_duration_s = int(round(vp.extension_duration_s)) if is_extension and vp.extension_duration_s else int(round(vp.total_duration_s))
+        effective_prev_id = previous_provider_job_id or vp.source_provider_job_id
         directive = _compile_google_video_directive(plan)
 
         input_items: list[dict[str, Any]] = [{"type": "text", "text": directive}]
@@ -230,11 +266,11 @@ class GoogleVideoAdapter(VideoProviderAdapter):
                 "type": "video",
                 "aspect_ratio": vp.aspect_ratio,
                 "resolution": vp.resolution,
-                "duration": int(round(vp.total_duration_s)),
+                "duration": turn_duration_s,
             },
         }
-        if previous_provider_job_id:
-            body["previous_interaction_id"] = previous_provider_job_id
+        if effective_prev_id:
+            body["previous_interaction_id"] = effective_prev_id
 
         try:
             with build_http_client(self.timeout_seconds) as client:
