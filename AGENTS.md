@@ -5,16 +5,17 @@ Build Production Studio as a focused image and video production application. The
 
 ## Read first
 1. README.md
-2. docs/PRD.md
-3. docs/PROTOCOL_MAPPING.md
-4. docs/WORKFLOWS.md
-5. docs/UX_SPEC.md
-6. docs/ARCHITECTURE.md
-7. docs/PROVIDERS.md
-8. docs/QUALITY_AND_EVALUATION.md
-9. docs/SECURITY.md
-10. docs/ROADMAP.md
-11. docs/DECISIONS.md
+2. docs/FEATURE_PLAN.md
+3. docs/PRD.md
+4. docs/PROTOCOL_MAPPING.md
+5. docs/WORKFLOWS.md
+6. docs/UX_SPEC.md
+7. docs/ARCHITECTURE.md
+8. docs/PROVIDERS.md
+9. docs/QUALITY_AND_EVALUATION.md
+10. docs/SECURITY.md
+11. docs/ROADMAP.md
+12. docs/DECISIONS.md
 
 ## Non negotiable rules
 - Inspect the existing repository before selecting a framework or replacing files.
