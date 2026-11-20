@@ -72,7 +72,7 @@ def create_app(settings: Settings | None = None, frontend_dist: Path | None = No
     app.include_router(production_router)
 
     # Optionally serve compiled React frontend (Level 2+ Web Application)
-    dist_path = frontend_dist or (Path(__file__).resolve().parents[3] / "frontend" / "dist")
+    dist_path = frontend_dist or (Path(__file__).resolve().parents[4] / "frontend" / "dist")
     if dist_path.exists() and (dist_path / "index.html").exists():
         assets_dir = dist_path / "assets"
         if assets_dir.exists():

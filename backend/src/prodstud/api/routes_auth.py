@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from prodstud.api.deps import get_current_user, get_runtime
@@ -136,6 +136,34 @@ def logout(
         payload={},
     )
     return {"status": "logged_out"}
+
+
+@router.get("/api/auth/session")
+def session_state(
+    request: Request,
+    rt: AppRuntime = Depends(get_runtime),
+) -> dict:
+    raw_token = None
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        raw_token = auth_header[7:].strip()
+    if not raw_token:
+        raw_token = request.cookies.get(SESSION_COOKIE)
+    if not raw_token:
+        return {"authenticated": False, "user": None}
+    user_id = rt.repo.get_user_id_for_session(hash_session_token(raw_token))
+    if not user_id:
+        return {"authenticated": False, "user": None}
+    profile = rt.repo.get_user_profile(user_id)
+    if not profile:
+        return {"authenticated": False, "user": None}
+    return {
+        "authenticated": True,
+        "user": profile.model_dump(),
+        "environment": rt.settings.env,
+        "local_test_fixture_enabled": rt.settings.enable_local_fixture,
+        "storage_usage_bytes": rt.store.total_usage_bytes(),
+    }
 
 
 @router.get("/api/auth/me")

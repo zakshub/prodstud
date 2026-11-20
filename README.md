@@ -1,33 +1,50 @@
 # Production Studio
 
-A focused image and video production application powered by a Production Intelligence Engine and a provider adapter layer.
+A focused image and video production workbench powered by a **170-Protocol Production Intelligence Engine** and an isolated provider adapter layer.
 
-## Product direction
+## Product Direction
 
-Production Studio creates image and video assets. It is not a general chatbot or a generic prompt box. The Production Intelligence Engine interprets the brief, selects relevant production decisions from the 170 Protocol framework, prepares a production plan, checks feasibility, and evaluates outputs. Generation providers execute approved requests.
+Production Studio plans, generates, inspects, revises, and exports still images and timed video sequences. It is an asset-first production studio — not a general chatbot, generic prompt wrapper, or social publishing scheduler.
 
-## Initial provider
+- **Production Intelligence Engine (`backend/src/prodstud/engine/`):** Provider-independent brief interpretation, contextual activation of the 170-Protocol Registry (`data/protocols_170.json`), physically causal image planning, dedicated timed video shot planning, contradiction/feasibility checks, controlled revision mapping, and advisory quality evaluation with real Pillow/FFprobe forensics.
+- **Provider Layer (`backend/src/prodstud/providers/`):** Separate verified Image (`GoogleImageAdapter` targeting `gemini-nano-banana-2.1`, `gemini-3-pro-image`, `gemini-3.1-flash-lite-image`) and Video (`GoogleVideoAdapter` targeting `gemini-omni-1.2-flash` Interactions API, plus Enterprise `veo-3.1-generate-001` capability record) adapters. Shut-down models (`imagen-4`, `veo-3.1-generate-preview`) are explicitly disabled with migration guidance.
+- **Security & Spend Governance:** Server-side Fernet-encrypted API key vault (`PRODSTUD_MASTER_KEY`), default `$0.00` daily spend guard (`D013`), HMAC-signed explicit per-request approval tokens, idempotency protection, `unknown` timeout state with zero blind paid retries, and secret-redacted audit logs.
+- **Evolutionary Interface (`docs/INTERFACE_EVOLUTION_ROADMAP.md`):** Level 1 CLI (`prodstud`) and Level 2–3 Web Workspace (`frontend/`) with independently calibrated **Calibrated Studio Dark** and **Archival Proofing Light** appearances.
 
-Google is the first provider. Image and video generation must use separately verified provider capabilities and adapters. Do not assume that Gemini text, image generation, and video generation share the same API or model capabilities.
+## Quickstart (Local Development)
 
-## Core principles
+### 1. Backend & Level 1 CLI
+```bash
+uv venv .venv --python 3.11
+uv pip install --python .venv/bin/python -e "backend[dev]"
 
-- Keep production intelligence separate from provider execution.
-- Do not expose API keys in the browser or commit them to this public repository.
-- Require explicit user approval before billable generation.
-- Do not implement the 170 protocols as a 170 question form. Activate relevant protocols contextually.
-- Treat video as a timed sequence of shots with action, camera movement, continuity, and transitions, not as a still image prompt with duration appended.
-- Make quality evaluation advisory and state its limitations.
+# Initialize and verify database integrity
+.venv/bin/prodstud init-db
+.venv/bin/prodstud audit-db
+
+# Run backend automated test suite (21 tests)
+.venv/bin/pytest backend/tests -v
+```
+
+### 2. Frontend Build & Full-Stack Server
+```bash
+cd frontend
+npm install
+npm run build
+cd ..
+
+# Serve API + compiled Web Workspace on http://127.0.0.1:8000
+.venv/bin/prodstud serve --host 127.0.0.1 --port 8000
+```
+
+> **Zero-Dollar Default Safety:** Newly registered accounts start with a `$0.00` daily spend cap. In `development` / `test` mode, an explicitly badged non-billable `local_test_fixture` adapter lets you verify the full Image (PNG) and Video (H.264 MP4) lifecycle locally at `$0.00`. To run live Google generations, add your Google Gemini API key in **Settings -> Server-Side Provider Credentials** and explicitly raise your daily spend cap.
 
 ## Documentation
 
-The product requirements, phased feature plan from MVP to Enterprise, protocol mapping, workflows, UX specification, architecture, provider strategy, quality system, security model, roadmap, and decision log are maintained under `docs/`.
-
-## Product planning
-
+- [Phase 0 Repository Audit, Intelligence Integration & Verified Google Capability Matrix](docs/PHASE_0_AUDIT_AND_INTEGRATION.md)
+- [Interface Evolution Roadmap & Designer Brain Visual Brief](docs/INTERFACE_EVOLUTION_ROADMAP.md)
+- [170-Protocol Registry Coverage Report](docs/PROTOCOL_COVERAGE.md)
 - [Phased Feature Plan: MVP to Enterprise](docs/FEATURE_PLAN.md)
 - [Delivery Roadmap](docs/ROADMAP.md)
-
-## Status
-
-Repository bootstrap in progress. Implementation must begin with Milestone 0: inspect the repository, validate the architecture, and verify current official Google documentation before selecting a stack or writing provider integration code.
+- [Decision Log (`D001–D016`)](docs/DECISIONS.md)
+- [Architecture](docs/ARCHITECTURE.md), [Providers](docs/PROVIDERS.md), [Quality & Evaluation](docs/QUALITY_AND_EVALUATION.md), [Security](docs/SECURITY.md), [UX Spec](docs/UX_SPEC.md), [Workflows](docs/WORKFLOWS.md)

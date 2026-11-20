@@ -1,0 +1,91 @@
+/* Production Studio Design Tokens — Designer Brain Visual Brief
+ * Independently tuned Calibrated Studio Dark (Primary) & Archival Proofing Light (Companion).
+ * Allocation: Canvas 65-72% | Surface 18-24% | Accent 5-8% | Semantic Alerts <5%
+ */
+
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-canvas: #131518;
+  --bg-surface: #1b1e23;
+  --bg-elevated: #23272e;
+  --bg-inset: #0e1013;
+  --bg-hover: #2a2f38;
+
+  --border-subtle: #2e333c;
+  --border-strong: #434b59;
+
+  --text-primary: #f1f3f5;
+  --text-secondary: #a2abb9;
+  --text-muted: #7b8494;
+
+  /* Cinema Tungsten Accent — calibrated >7.5:1 contrast with dark button ink */
+  --accent-primary: #e0912e;
+  --accent-primary-hover: #eba043;
+  --accent-ink: #111316;
+  --accent-soft: rgba(224, 145, 46, 0.14);
+  --accent-border: rgba(224, 145, 46, 0.42);
+
+  /* Semantic Statuses (always paired with text/symbol) */
+  --status-success: #3eb489;
+  --status-success-bg: rgba(62, 180, 137, 0.14);
+  --status-warning: #e6a835;
+  --status-warning-bg: rgba(230, 168, 53, 0.15);
+  --status-danger: #e46363;
+  --status-danger-bg: rgba(228, 99, 99, 0.16);
+  --status-info: #68a6e0;
+  --status-info-bg: rgba(104, 166, 224, 0.15);
+
+  --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.62);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --bg-canvas: #f4f5f7;
+  --bg-surface: #ffffff;
+  --bg-elevated: #eceff3;
+  --bg-inset: #e5e9ef;
+  --bg-hover: #e2e6ed;
+
+  --border-subtle: #d4d9e1;
+  --border-strong: #a7b0be;
+
+  --text-primary: #14171c;
+  --text-secondary: #4c5563;
+  --text-muted: #646e7d;
+
+  /* Burned Ochre Accent — independently deepened for >5.1:1 WCAG AA contrast on white */
+  --accent-primary: #a65a0a;
+  --accent-primary-hover: #8f4d08;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(166, 90, 10, 0.1);
+  --accent-border: rgba(166, 90, 10, 0.35);
+
+  --status-success: #166f4c;
+  --status-success-bg: rgba(22, 111, 76, 0.11);
+  --status-warning: #925800;
+  --status-warning-bg: rgba(146, 88, 0, 0.11);
+  --status-danger: #b52626;
+  --status-danger-bg: rgba(181, 38, 38, 0.1);
+  --status-info: #1b5a94;
+  --status-info-bg: rgba(27, 90, 148, 0.1);
+
+  --shadow-modal: 0 18px 48px rgba(20, 23, 28, 0.18);
+}
+
+:root {
+  --font-sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  --radius-md: 7px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+}

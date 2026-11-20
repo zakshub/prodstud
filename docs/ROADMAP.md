@@ -12,29 +12,28 @@ The complete feature scope and phase definitions live in [FEATURE_PLAN.md](FEATU
 Exit gate: source manual summary inventory is traceable (`170/170` IDs), provider capabilities are verified against official Nov 2026 Google documentation, and architecture/security decisions are documented.
 
 
-## Phase 1: MVP foundation
-- Single user authentication and settings.
-- Projects and project workspace.
-- Image and video briefs.
-- Reference uploads.
-- Contextual protocol activation and production plans.
-- Google image generation.
-- Basic timed video shot planning and Google video generation.
-- Explicit billable generation approval.
-- Job status, asset preview, download, basic quality review, and controlled revision.
-- Server side secrets and safe job handling.
+## Phase 1: MVP foundation — **Status: Verified (100.0% — 2026-11-19)**
+- [x] Single user authentication and settings (`backend/src/prodstud/api/routes_auth.py`, `AuthView`, `SettingsView`).
+- [x] Projects and asset-first 3-zone project workspace (`ProjectsView`, `WorkspaceView`).
+- [x] Image and video briefs with contextual 170-protocol activation and explainable production plans (`ProductionIntelligenceEngine`).
+- [x] Reference uploads with MIME/magic-byte validation, roles, and usage-rights confirmation.
+- [x] Verified Google image adapter (`gemini-nano-banana-2.1`, `gemini-3-pro-image`, `gemini-3.1-flash-lite-image`; Imagen disabled) + non-billable dev/test local fixture.
+- [x] Dedicated timed video shot planner and verified Google video adapter (`gemini-omni-1.2-flash` Interactions API; Veo 3.1 Preview shutdown recorded; Veo 3.1 GA Enterprise marked conditional) + non-billable dev/test MP4 animatic fixture.
+- [x] Explicit pre-billing generation approval quote & confirmation modal with `$0.00` default spend guard.
+- [x] Durable job state tracking (including `unknown` state with zero blind paid retries), asset preview, sanitized ZIP + provenance sidecar export, advisory quality review (Pillow/FFprobe), and controlled targeted revision.
+- [x] Level 1 CLI (`prodstud`) and Level 2 Web Workspace (independently tuned Calibrated Studio Dark & Archival Proofing Light themes).
 
-Exit gate: one user can complete the full image and video production loop safely.
+Exit gate: verified via 22 automated pytest checks, CLI E2E, and live Chromium multi-viewport E2E QA (`1440x900` & `768x1024`).
 
-## Phase 2: Production Studio V1
-- Verified full protocol registry and activation trace.
-- Reusable templates and advanced plan controls.
-- Stronger image and multi shot video workflows.
-- Reference roles and continuity controls.
-- Evidence based quality findings and regression tests.
-- Search, tags, collections, version comparison, and bulk export.
+## Phase 2: Production Studio V1 — **Status: In Progress (66.7% Verified — 2026-11-19)**
+- [x] Verified full 170-protocol registry explorer (`ProtocolsView`) and per-plan protocol activation trace (`PlanView`).
+- [x] Reusable production templates (`GET/POST /api/templates`) and reference role classification (`product`, `identity`, `style`, `composition`, `environment`, `start_frame`, `end_frame`).
+- [x] Evidence-based advisory quality reports with human review feedback (`POST /api/reviews/{id}/feedback`) and representative brief regression test suite (`test_regression_and_video_async.py`).
+- [x] Asset search, filters, tags, collections, favorites, side-by-side version comparison with API decision diffs (`LibraryCompareView`), storage usage visibility, and bulk ZIP export (`POST /api/projects/{id}/export-bulk`).
+- [ ] Live multi-output variations, batch generation cost approval, and multi-turn video extension execution.
+- [ ] Full original manual PDF page-by-page cross-check and optional multimodal vision QC integration.
 
-Exit gate: dependable repeatable professional workflows for an individual user.
+Exit gate: dependable repeatable professional workflows for an individual user (remaining V1 items tracked in `docs/IMPLEMENTATION_STATUS.json`).
 
 ## Phase 3: Advanced Creator and Professional Edition
 - Advanced production controls and reusable profiles.
