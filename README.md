@@ -21,7 +21,12 @@ Google is the first provider. Image and video generation must use separately ver
 
 ## Documentation
 
-The product requirements, protocol mapping, workflows, UX specification, architecture, provider strategy, quality system, security model, roadmap, and decision log will be maintained under `docs/`.
+The product requirements, phased feature plan from MVP to Enterprise, protocol mapping, workflows, UX specification, architecture, provider strategy, quality system, security model, roadmap, and decision log are maintained under `docs/`.
+
+## Product planning
+
+- [Phased Feature Plan: MVP to Enterprise](docs/FEATURE_PLAN.md)
+- [Delivery Roadmap](docs/ROADMAP.md)
 
 ## Status
 
