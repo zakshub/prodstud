@@ -112,9 +112,10 @@ def apply_targeted_revision(
     elif new_plan.media_type == MediaType.VIDEO and new_plan.video_plan is not None:
         vp = new_plan.video_plan
         all_fields = ["aspect_ratio", "resolution", "total_duration_s", "continuity_invariants", "shots"]
+        mutable_video_fields = {"aspect_ratio", "resolution", "fps", "total_duration_s", "sequence_intent", "continuity_invariants"}
 
         for field_name, val in revision_request.override_fields.items():
-            if hasattr(vp, field_name) and val is not None and field_name != "shots":
+            if field_name in mutable_video_fields and hasattr(vp, field_name) and val is not None:
                 setattr(vp, field_name, val)
                 changed_fields.append(field_name)
 
@@ -125,17 +126,22 @@ def apply_targeted_revision(
                 target_order = int(shot_match.group(1))
 
         if target_order is not None:
-            for shot in vp.shots:
-                if shot.order == target_order:
-                    if any(k in lower for k in ("slower", "static", "locked", "pan", "dolly", "track", "handheld", "camera")):
-                        shot.camera_movement = f"{shot.camera_movement} -> Revised: {text}"
-                        changed_fields.append(f"shot_{shot.order}.camera_movement")
-                    elif any(k in lower for k in ("close", "wide", "frame", "framing")):
-                        shot.framing = f"{shot.framing} -> Revised: {text}"
-                        changed_fields.append(f"shot_{shot.order}.framing")
-                    else:
-                        shot.subject_action = f"{shot.subject_action} (Revised: {text})"
-                        changed_fields.append(f"shot_{shot.order}.subject_action")
+            matched_shot = next((s for s in vp.shots if s.order == target_order), None)
+            if matched_shot is None and vp.shots:
+                matched_shot = vp.shots[0]
+            if matched_shot is not None:
+                if any(k in lower for k in ("slower", "static", "locked", "pan", "dolly", "track", "handheld", "camera")):
+                    matched_shot.camera_movement = f"{matched_shot.camera_movement} -> Revised: {text}"
+                    changed_fields.append(f"shot_{matched_shot.order}.camera_movement")
+                elif any(k in lower for k in ("warm", "cool", "light", "lighting", "shadow", "exposure", "golden", "darker", "brighter")):
+                    matched_shot.lighting_continuity = f"{matched_shot.lighting_continuity} -> Revised: {text}"
+                    changed_fields.append(f"shot_{matched_shot.order}.lighting_continuity")
+                elif any(k in lower for k in ("close", "wide", "frame", "framing")):
+                    matched_shot.framing = f"{matched_shot.framing} -> Revised: {text}"
+                    changed_fields.append(f"shot_{matched_shot.order}.framing")
+                else:
+                    matched_shot.subject_action = f"{matched_shot.subject_action} (Revised: {text})"
+                    changed_fields.append(f"shot_{matched_shot.order}.subject_action")
         else:
             ar_match = re.search(r"\b(16:9|9:16|1:1)\b", lower)
             if ar_match and "aspect_ratio" not in changed_fields:

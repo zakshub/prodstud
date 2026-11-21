@@ -1,6 +1,15 @@
 {
-  "updated_at": "2026-11-20",
+  "updated_at": "2026-11-21",
   "overall_verified_pct": 44.2,
+  "verification_evidence": {
+    "mvp_local_status": "verified_ready_for_merge",
+    "backend_pytest": "40/40 passed",
+    "frontend_typecheck_and_build": "passed (tsc --noEmit + vite build)",
+    "browser_e2e_qa": "12/12 live Chromium MVP workflows passed (auth persistence, image+video planning/approval/generation/revision/export, 2x variations, batch approval, video extension, spend guard, idempotency keys, bulk ZIP export, dark/light responsive WCAG 2.2, 0 console/page errors)",
+    "vision_qc_controlled_audit": "13/13 synthetic cases audited at $0.00 spend (TP=5, TN=2, FP=3, FN=3)",
+    "live_provider_status": "NOT_LIVE_VERIFIED (contract-tested via mocked HTTP; blocked on owner GEMINI_API_KEY + explicit spend authorization)",
+    "external_blockers": ["P2-7", "P2-8"]
+  },
   "phases": [
     {
       "id": "phase_0",

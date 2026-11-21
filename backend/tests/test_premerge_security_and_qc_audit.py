@@ -375,6 +375,26 @@ def test_cross_user_isolation_plan_spoofing_batch_duplicates_and_feedback_audit(
     assert vp_after["extension_duration_s"] is None
     assert vp_after["source_provider_job_id"] is None
 
+    # Client REVISE also CANNOT spoof server-owned video extension provenance via override_fields
+    spoof_rev = client_a.post(
+        f"/api/plans/{vplan_a['id']}/revise",
+        json={
+            "change_request": "Shift lighting warmer golden tone on shot 1",
+            "target_shot_order": 1,
+            "override_fields": {
+                "extended_from_asset_id": "ast_forged_rev",
+                "extension_duration_s": 9.0,
+                "source_provider_job_id": "operations/forged-rev-op",
+            },
+        },
+    )
+    assert spoof_rev.status_code == 201
+    rev_vp = spoof_rev.json()["plan"]["video_plan"]
+    assert rev_vp["extended_from_asset_id"] is None
+    assert rev_vp["extension_duration_s"] is None
+    assert rev_vp["source_provider_job_id"] is None
+    assert "shot_1.lighting_continuity" in spoof_rev.json()["revision"]["changed_fields"]
+
     # Batch rejects duplicate plan_ids
     dup_batch = client_a.post(
         f"/api/projects/{pid_a}/batches/quote",

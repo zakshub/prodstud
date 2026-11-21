@@ -33,10 +33,19 @@ export const SettingsView: React.FC<Props> = ({
   const [busy, setBusy] = useState(false);
 
   const refresh = async () => {
-    const [creds, events] = await Promise.all([api.listCredentials(), api.listAudit()]);
-    setCredentials(creds);
-    setAuditEvents(events);
+    try {
+      const [creds, events] = await Promise.all([api.listCredentials(), api.listAudit()]);
+      setCredentials(creds);
+      setAuditEvents(events);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load credentials and audit history.");
+    }
   };
+
+  useEffect(() => {
+    setDisplayName(user.display_name);
+    setSpendCap(String(user.daily_spend_cap_usd.toFixed(2)));
+  }, [user.display_name, user.daily_spend_cap_usd]);
 
   useEffect(() => {
     refresh();
@@ -98,10 +107,13 @@ export const SettingsView: React.FC<Props> = ({
   const handleRevoke = async (provider: string) => {
     if (!window.confirm(`Revoke stored server-side credential for '${provider}'?`)) return;
     setBusy(true);
+    setError(null);
     try {
       await api.revokeCredential(provider);
       setNotice(`Credential for '${provider}' revoked and wiped from encrypted vault.`);
       await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to revoke credential.");
     } finally {
       setBusy(false);
     }

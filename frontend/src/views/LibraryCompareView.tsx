@@ -20,6 +20,8 @@ export const LibraryCompareView: React.FC<Props> = ({
   const [mediaFilter, setMediaFilter] = useState("");
   const [favOnly, setFavOnly] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const [leftId, setLeftId] = useState(initialComparePair?.[0] ?? "");
   const [rightId, setRightId] = useState(initialComparePair?.[1] ?? "");
@@ -30,15 +32,20 @@ export const LibraryCompareView: React.FC<Props> = ({
   } | null>(null);
 
   const loadAssets = async () => {
-    const list = await api.searchAssets({
-      q: query || undefined,
-      media_type: mediaFilter || undefined,
-      favorite_only: favOnly,
-    });
-    setAssets(list);
-    if (!leftId && list.length >= 2) {
-      setLeftId(list[1].id);
-      setRightId(list[0].id);
+    try {
+      setExportError(null);
+      const list = await api.searchAssets({
+        q: query || undefined,
+        media_type: mediaFilter || undefined,
+        favorite_only: favOnly,
+      });
+      setAssets(list);
+      if (!leftId && list.length >= 2) {
+        setLeftId(list[1].id);
+        setRightId(list[0].id);
+      }
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : "Failed to load asset library.");
     }
   };
 
@@ -62,23 +69,45 @@ export const LibraryCompareView: React.FC<Props> = ({
 
   const handleBulkExport = async () => {
     if (selectedIds.length === 0) return;
-    const first = assets.find((a) => selectedIds.includes(a.id));
-    if (!first) return;
-    const sameProjectIds = assets.filter((a) => selectedIds.includes(a.id) && a.project_id === first.project_id).map((a) => a.id);
-    const resp = await fetch(`/api/projects/${first.project_id}/export-bulk`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ asset_ids: sameProjectIds }),
-    });
-    if (!resp.ok) return;
-    const blob = await resp.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `prodstud_bulk_export.zip`;
-    a.click();
-    URL.revokeObjectURL(url);
+    setExportError(null);
+    setExportNotice(null);
+    const selectedAssets = assets.filter((a) => selectedIds.includes(a.id));
+    if (selectedAssets.length === 0) return;
+    const distinctProjects = new Set(selectedAssets.map((a) => a.project_id));
+    if (distinctProjects.size > 1) {
+      setExportError("Bulk ZIP export bundles assets from one project at a time. Select assets from a single project.");
+      return;
+    }
+    const targetProjectId = selectedAssets[0].project_id;
+    try {
+      const resp = await fetch(`/api/projects/${targetProjectId}/export-bulk`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ asset_ids: selectedAssets.map((a) => a.id) }),
+      });
+      if (!resp.ok) {
+        let msg = `Bulk export failed (HTTP ${resp.status})`;
+        try {
+          const data = await resp.json();
+          if (typeof data.detail === "string") msg = data.detail;
+        } catch {
+          /* ignore */
+        }
+        setExportError(msg);
+        return;
+      }
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `prodstud_bulk_export_${targetProjectId}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setExportNotice(`Exported ${selectedAssets.length} asset(s) with provenance sidecars.`);
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : "Bulk export failed.");
+    }
   };
 
   const kb = (storageUsageBytes / 1024).toFixed(1);
@@ -101,6 +130,9 @@ export const LibraryCompareView: React.FC<Props> = ({
           </button>
         </div>
       </div>
+
+      {exportNotice && <div className="callout callout-info">{exportNotice}</div>}
+      {exportError && <div className="callout callout-danger" role="alert">{exportError}</div>}
 
       {tab === "library" ? (
         <>

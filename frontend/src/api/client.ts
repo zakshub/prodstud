@@ -164,6 +164,7 @@ export const api = {
       quote_id: string;
       confirmation_token: string;
       explicit_user_confirmed: boolean;
+      idempotency_key?: string;
       parent_asset_id?: string | null;
     },
   ) =>

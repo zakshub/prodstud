@@ -47,17 +47,27 @@ export const ProjectsView: React.FC<Props> = ({
 
   const handleRename = async (projectId: string) => {
     if (!renameValue.trim()) return;
-    await api.updateProject(projectId, { name: renameValue.trim() });
-    setRenamingId(null);
-    await onProjectsChanged();
+    setError(null);
+    try {
+      await api.updateProject(projectId, { name: renameValue.trim() });
+      setRenamingId(null);
+      await onProjectsChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to rename project.");
+    }
   };
 
   const handleArchiveToggle = async (project: ProjectRecord) => {
     if (!project.archived && !window.confirm(`Archive project "${project.name}"? You can reopen it anytime from archived view.`)) {
       return;
     }
-    await api.updateProject(project.id, { archived: !project.archived });
-    await onProjectsChanged();
+    setError(null);
+    try {
+      await api.updateProject(project.id, { archived: !project.archived });
+      await onProjectsChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update project status.");
+    }
   };
 
   return (

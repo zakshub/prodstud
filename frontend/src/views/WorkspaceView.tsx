@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/client";
 import type {
   ApprovalQuote,
@@ -44,6 +44,8 @@ export const WorkspaceView: React.FC<Props> = ({
   const [workspace, setWorkspace] = useState<ProjectWorkspaceData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const submittingRef = useRef(false);
 
   // Brief state
   const [mediaType, setMediaType] = useState<MediaType>("image");
@@ -115,6 +117,19 @@ export const WorkspaceView: React.FC<Props> = ({
     }
   }, [mediaType, mediaCapabilities, selectedModelKey]);
 
+  // Keep extension duration clamped within remaining cumulative 30s video cap
+  useEffect(() => {
+    if (activeAsset && activeAsset.media_type === "video") {
+      const maxAllowed = Math.min(10, Math.max(3, Math.floor(30 - (activeAsset.duration_s ?? 0))));
+      setExtensionDurationS((prev) => Math.max(3, Math.min(prev, maxAllowed)));
+    }
+  }, [activeAsset?.id, activeAsset?.duration_s]);
+
+  // Clear targeted shot index whenever active plan changes
+  useEffect(() => {
+    setRevisionShotOrder("");
+  }, [activePlan?.id]);
+
   const loadWorkspace = async (projectId: string, preserveActive = false) => {
     setLoading(true);
     setError(null);
@@ -125,7 +140,12 @@ export const WorkspaceView: React.FC<Props> = ({
         setActivePlan(data.plans[0] ?? null);
         setActiveJob(data.jobs[0] ?? null);
         setSelectedBatchPlanIds([]);
+        setSelectedRefIds([]);
         setLatestBatch(null);
+        setLatestRevision(null);
+        setVariationCount(1);
+        setRevisionShotOrder("");
+        setNotice(null);
         const latestAsset = data.assets[0] ?? null;
         setActiveAsset(latestAsset);
         if (latestAsset) {
@@ -222,21 +242,36 @@ export const WorkspaceView: React.FC<Props> = ({
   };
 
   const handleSavePlanEdits = async (planId: string, imagePlan: ImagePlanDetails) => {
-    const updated = await api.editPlan(planId, { image_plan: imagePlan });
-    setActivePlan(updated);
-    await loadWorkspace(activeProjectId, true);
+    setError(null);
+    setNotice(null);
+    try {
+      const updated = await api.editPlan(planId, { image_plan: imagePlan });
+      setActivePlan(updated);
+      setNotice("Image production plan edits saved and re-validated.");
+      await loadWorkspace(activeProjectId, true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save plan edits.");
+    }
   };
 
   const handleSaveVideoPlanEdits = async (planId: string, videoPlan: VideoSequencePlan) => {
-    const updated = await api.editPlan(planId, { video_plan: videoPlan });
-    setActivePlan(updated);
-    await loadWorkspace(activeProjectId, true);
+    setError(null);
+    setNotice(null);
+    try {
+      const updated = await api.editPlan(planId, { video_plan: videoPlan });
+      setActivePlan(updated);
+      setNotice("Video shot plan edits saved and re-validated.");
+      await loadWorkspace(activeProjectId, true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save video plan edits.");
+    }
   };
 
   const handleRequestQuote = async () => {
     if (!activePlan) return;
     setBusyAction("quoting");
     setError(null);
+    setNotice(null);
     try {
       const [provider_id, model_id] = selectedProviderAndModel();
       const validCap = capabilities.find(
@@ -256,9 +291,12 @@ export const WorkspaceView: React.FC<Props> = ({
   };
 
   const handleConfirmGenerate = async () => {
+    if (submittingRef.current) return;
     if (pendingBatchQuote) {
+      submittingRef.current = true;
       setBusyAction("generating");
       setError(null);
+      setNotice(null);
       try {
         const res = await api.executeBatch(activeProjectId, {
           batch_quote_id: pendingBatchQuote.batch_quote_id,
@@ -284,19 +322,23 @@ export const WorkspaceView: React.FC<Props> = ({
         setError(err instanceof Error ? err.message : "Batch execution failed.");
         setPendingBatchQuote(null);
       } finally {
+        submittingRef.current = false;
         setBusyAction(null);
       }
       return;
     }
 
     if (!activePlan || !pendingQuote) return;
+    submittingRef.current = true;
     setBusyAction("generating");
     setError(null);
+    setNotice(null);
     try {
       const res = await api.submitGeneration(activePlan.id, {
         quote_id: pendingQuote.quote_id,
         confirmation_token: pendingQuote.confirmation_token,
         explicit_user_confirmed: true,
+        idempotency_key: `idem_${pendingQuote.quote_id}`,
         parent_asset_id:
           activePlan.video_plan?.extended_from_asset_id ?? (activePlan.parent_plan_id ? activeAsset?.id ?? null : null),
       });
@@ -316,6 +358,7 @@ export const WorkspaceView: React.FC<Props> = ({
       setError(err instanceof Error ? err.message : "Generation request failed.");
       setPendingQuote(null);
     } finally {
+      submittingRef.current = false;
       setBusyAction(null);
     }
   };
@@ -324,6 +367,7 @@ export const WorkspaceView: React.FC<Props> = ({
     if (selectedBatchPlanIds.length === 0) return;
     setBusyAction("batch-quoting");
     setError(null);
+    setNotice(null);
     try {
       const items = selectedBatchPlanIds.map((pid) => ({
         plan_id: pid,
@@ -344,6 +388,7 @@ export const WorkspaceView: React.FC<Props> = ({
     if (!activeAsset || activeAsset.media_type !== "video" || !extensionPrompt.trim()) return;
     setBusyAction("extending");
     setError(null);
+    setNotice(null);
     try {
       const extPlan = await api.extendVideoAsset(activeAsset.id, {
         continuation_prompt: extensionPrompt.trim(),
@@ -361,21 +406,35 @@ export const WorkspaceView: React.FC<Props> = ({
 
   const handlePollJob = async (jobId: string) => {
     setBusyAction("polling");
+    setError(null);
     try {
       const res = await api.pollJob(jobId);
       setActiveJob(res.job);
-      if (res.asset) setActiveAsset(res.asset);
+      if (res.asset) {
+        setActiveAsset(res.asset);
+        setTagsInput(res.asset.tags.join(", "));
+        setCollectionInput(res.asset.collection_name ?? "");
+      }
       if (res.quality_review) setActiveReview(res.quality_review);
       await loadWorkspace(activeProjectId, true);
+      await onRefreshGlobal();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Job status check failed.");
     } finally {
       setBusyAction(null);
     }
   };
 
   const handleCancelJob = async (jobId: string) => {
-    const res = await api.cancelJob(jobId);
-    setActiveJob(res.job);
-    await loadWorkspace(activeProjectId, true);
+    setError(null);
+    try {
+      const res = await api.cancelJob(jobId);
+      setActiveJob(res.job);
+      setNotice("Generation job cancelled.");
+      await loadWorkspace(activeProjectId, true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to cancel job.");
+    }
   };
 
   const handleRevise = async (e: React.FormEvent) => {
@@ -383,6 +442,7 @@ export const WorkspaceView: React.FC<Props> = ({
     if (!activePlan || !revisionInput.trim()) return;
     setBusyAction("revising");
     setError(null);
+    setNotice(null);
     try {
       const shotNum = revisionShotOrder ? Number(revisionShotOrder) : null;
       const res = await api.revisePlan(activePlan.id, revisionInput.trim(), activeAsset?.id ?? null, shotNum);
@@ -398,42 +458,60 @@ export const WorkspaceView: React.FC<Props> = ({
   };
 
   const handleFeedback = async (reviewId: string, status: "accepted" | "rejected" | "needs_rework", note: string) => {
-    const updated = await api.submitReviewFeedback(reviewId, status, note);
-    setActiveReview(updated);
-    await loadWorkspace(activeProjectId, true);
+    setError(null);
+    try {
+      const updated = await api.submitReviewFeedback(reviewId, status, note);
+      setActiveReview(updated);
+      setNotice(`Human quality review recorded (${status.replace("_", " ")}).`);
+      await loadWorkspace(activeProjectId, true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save human review feedback.");
+    }
   };
 
   const handleOrganizeSave = async () => {
     if (!activeAsset) return;
-    const tags = tagsInput
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    const updated = await api.organizeAsset(activeAsset.id, {
-      tags,
-      collection_name: collectionInput.trim(),
-    });
-    setActiveAsset(updated);
-    await loadWorkspace(activeProjectId, true);
+    setError(null);
+    try {
+      const tags = tagsInput
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const updated = await api.organizeAsset(activeAsset.id, {
+        tags,
+        collection_name: collectionInput.trim(),
+      });
+      setActiveAsset(updated);
+      setNotice("Asset tags and collection saved.");
+      await loadWorkspace(activeProjectId, true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save asset organization metadata.");
+    }
   };
 
   const handleSaveTemplate = async () => {
     if (!promptText.trim()) return;
     const tName = window.prompt("Template name (e.g. Studio Watch Still):");
     if (!tName || !tName.trim()) return;
-    await api.createTemplate({
-      name: tName.trim(),
-      media_type: mediaType,
-      description: `Saved from ${workspace?.project.name ?? "project"}`,
-      default_brief: {
-        prompt_text: promptText.trim(),
-        environment: environment.trim(),
-        aspect_ratio: aspectRatio,
-        resolution,
-        duration_s: mediaType === "video" ? durationS : undefined,
-      },
-    });
-    await onRefreshGlobal();
+    setError(null);
+    try {
+      await api.createTemplate({
+        name: tName.trim(),
+        media_type: mediaType,
+        description: `Saved from ${workspace?.project.name ?? "project"}`,
+        default_brief: {
+          prompt_text: promptText.trim(),
+          environment: environment.trim(),
+          aspect_ratio: aspectRatio,
+          resolution,
+          duration_s: mediaType === "video" ? durationS : undefined,
+        },
+      });
+      setNotice(`Saved reusable template "${tName.trim()}".`);
+      await onRefreshGlobal();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save reusable template.");
+    }
   };
 
   const applyTemplate = (tpl: ProductionTemplateRecord) => {
@@ -576,6 +654,12 @@ export const WorkspaceView: React.FC<Props> = ({
           </div>
         )}
 
+        {notice && (
+          <div className="callout callout-info" role="status">
+            {notice}
+          </div>
+        )}
+
         {activeJob && activeJob.status === "unknown" && (
           <div className="callout callout-warning" role="alert">
             <strong>Uncertain Provider Acceptance (UNKNOWN State):</strong> {activeJob.error_message} Use{" "}
@@ -632,9 +716,14 @@ export const WorkspaceView: React.FC<Props> = ({
                   type="button"
                   className="btn btn-sm"
                   onClick={async () => {
-                    const updated = await api.organizeAsset(activeAsset.id, { is_favorite: !activeAsset.is_favorite });
-                    setActiveAsset(updated);
-                    await loadWorkspace(activeProjectId, true);
+                    setError(null);
+                    try {
+                      const updated = await api.organizeAsset(activeAsset.id, { is_favorite: !activeAsset.is_favorite });
+                      setActiveAsset(updated);
+                      await loadWorkspace(activeProjectId, true);
+                    } catch (err) {
+                      setError(err instanceof Error ? err.message : "Failed to update favorite status.");
+                    }
                   }}
                 >
                   {activeAsset.is_favorite ? "★ Favorited" : "☆ Favorite"}
