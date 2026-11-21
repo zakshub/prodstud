@@ -91,13 +91,18 @@ class BulkExportPayload(BaseModel):
 
 
 def _provider_error_to_http(exc: ProviderAdapterError) -> HTTPException:
-    status_code = (
-        402
-        if exc.category == ErrorCategory.SPEND_GUARD
-        else 403
-        if exc.category in {ErrorCategory.APPROVAL_REQUIRED, ErrorCategory.PROVIDER_AUTH}
-        else 400
-    )
+    if exc.category == ErrorCategory.SPEND_GUARD:
+        status_code = 402
+    elif exc.category in {ErrorCategory.APPROVAL_REQUIRED, ErrorCategory.PROVIDER_AUTH}:
+        status_code = 403
+    elif exc.category == ErrorCategory.QUOTA:
+        status_code = 429
+    elif exc.category == ErrorCategory.TIMEOUT_UNKNOWN:
+        status_code = 504
+    elif exc.category == ErrorCategory.NETWORK:
+        status_code = 502
+    else:
+        status_code = 400
     return HTTPException(
         status_code=status_code,
         detail={"category": exc.category.value, "message": redact_secrets(str(exc))},
@@ -183,6 +188,11 @@ def create_production_plan(
         raise HTTPException(status_code=404, detail="Project not found.")
 
     ref_rows = rt.repo.get_reference_rows(user.id, project_id, brief.reference_ids)
+    if brief.reference_ids and len(ref_rows) != len(set(brief.reference_ids)):
+        raise HTTPException(
+            status_code=400,
+            detail="One or more reference_ids were not found in this project or belong to another user.",
+        )
     refs = [rt.repo._row_to_reference(r) for r in ref_rows]
 
     try:
@@ -237,7 +247,16 @@ def edit_plan(
     if payload.image_plan is not None and plan.media_type == MediaType.IMAGE:
         plan.image_plan = payload.image_plan
     if payload.video_plan is not None and plan.media_type == MediaType.VIDEO:
-        plan.video_plan = payload.video_plan
+        # Preserve server-owned immutable extension lineage so clients can never spoof previous_interaction_id
+        orig_vp = plan.video_plan
+        edited_vp = payload.video_plan.model_copy(
+            update={
+                "extended_from_asset_id": orig_vp.extended_from_asset_id if orig_vp else None,
+                "extension_duration_s": orig_vp.extension_duration_s if orig_vp else None,
+                "source_provider_job_id": orig_vp.source_provider_job_id if orig_vp else None,
+            }
+        )
+        plan.video_plan = edited_vp
     if payload.recommended_provider is not None:
         plan.recommended_provider = payload.recommended_provider
     if payload.recommended_model is not None:
@@ -673,15 +692,16 @@ def submit_human_feedback(
     updated = rt.repo.record_human_feedback(user.id, review_id, payload.status, payload.note)
     if not updated:
         raise HTTPException(status_code=404, detail="Quality review not found.")
+    asset = rt.repo.get_asset(user.id, updated.asset_id)
     if payload.status == "accepted":
         rt.repo.update_asset_organization(user.id, updated.asset_id, accepted=True)
     rt.repo.record_audit(
         user_id=user.id,
-        project_id=None,
+        project_id=asset.project_id if asset else None,
         event_type="quality_feedback_recorded",
         entity_type="quality_review",
         entity_id=review_id,
-        payload={"status": payload.status},
+        payload={"status": payload.status, "asset_id": updated.asset_id},
     )
     return updated
 

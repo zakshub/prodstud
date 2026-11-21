@@ -17,6 +17,7 @@ from prodstud.config import Settings
 from prodstud.domain.enums import ErrorCategory, JobStatus, MediaType
 from prodstud.engine.vision_qc import VisionQCService
 from prodstud.providers.base import ProviderAdapterError, ProviderSubmissionResult
+from prodstud.providers.google_vision_qc import GoogleVisionQCAdapter
 from prodstud.security import sanitize_download_filename
 
 
@@ -523,7 +524,9 @@ def test_optional_multimodal_vision_qc_gating_and_mocked_execution(tmp_path: Pat
         )
 
     rt.jobs.vision_qc = VisionQCService(
-        http_client_factory=lambda t: httpx.Client(transport=httpx.MockTransport(vision_handler), timeout=t)
+        transport=GoogleVisionQCAdapter(
+            http_client_factory=lambda t: httpx.Client(transport=httpx.MockTransport(vision_handler), timeout=t)
+        )
     )
 
     vq_ok = client.post(f"/api/assets/{asset['id']}/review/vision/quote").json()
@@ -588,11 +591,13 @@ def test_optional_multimodal_vision_qc_gating_and_mocked_execution(tmp_path: Pat
         "findings": [],
     }
     rt.jobs.vision_qc = VisionQCService(
-        http_client_factory=lambda t: httpx.Client(
-            transport=httpx.MockTransport(
-                lambda req: httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": json.dumps(vid_mock)}]}}]})
-            ),
-            timeout=t,
+        transport=GoogleVisionQCAdapter(
+            http_client_factory=lambda t: httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda req: httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": json.dumps(vid_mock)}]}}]})
+                ),
+                timeout=t,
+            )
         )
     )
     vvq = client.post(f"/api/assets/{vid_asset['id']}/review/vision/quote").json()

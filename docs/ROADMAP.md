@@ -23,16 +23,16 @@ Exit gate: source manual summary inventory is traceable (`170/170` IDs), provide
 - [x] Durable job state tracking (including `unknown` state with zero blind paid retries), asset preview, sanitized ZIP + provenance sidecar export, advisory quality review (Pillow/FFprobe), and controlled targeted revision.
 - [x] Level 1 CLI (`prodstud`) and Level 2 Web Workspace (independently tuned Calibrated Studio Dark & Archival Proofing Light themes).
 
-Exit gate: verified via 30 automated pytest checks, CLI E2E, and live Chromium multi-viewport E2E + WCAG 2.2 QA (`1440x900` & `768x1024`).
+Exit gate: verified via 40 automated pytest checks, CLI E2E, and live Chromium multi-viewport E2E + WCAG 2.2 QA (`1440x900` & `768x1024`).
 
-## Phase 2: Production Studio V1 — **Status: In Progress (83.3% Verified; 2 External Owner-Input Gates Remaining — 2026-11-20)**
+## Phase 2: Production Studio V1 — **Status: In Progress (83.3% Verified; 2 External Owner-Input Gates Remaining — 2026-11-21)**
 - [x] Verified full 170-protocol registry explorer (`ProtocolsView`) and per-plan protocol activation trace (`PlanView`).
 - [x] Reusable production templates (`GET/POST /api/templates`) and reference role classification (`product`, `identity`, `style`, `composition`, `environment`, `start_frame`, `end_frame`).
 - [x] Evidence-based advisory quality reports with human review feedback (`POST /api/reviews/{id}/feedback`) and representative brief regression test suite (`test_regression_and_video_async.py`).
 - [x] Asset search, filters, tags, collections, favorites, side-by-side version comparison with API decision diffs (`LibraryCompareView`), storage usage visibility, and bulk ZIP export (`POST /api/projects/{id}/export-bulk`).
 - [x] Multi-output image variations (`1–4` outputs with Variation Contact Sheet, Spend Guard cost scaling, and fail-closed halt on `unknown`), batch generation with combined cost approval (`POST /api/projects/{id}/batches/quote` & `/execute`), and multi-turn video extension (`POST /api/assets/{id}/extend`, `+3–10s` up to `30s` cumulative using verified `previous_interaction_id` contract).
-- [x] Optional multimodal Vision QC (`POST /api/assets/{id}/review/vision/quote` & `/run`, explicitly gated behind `$0.00` Spend Guard + confirmation with honest coverage/limitations) and deterministic 170-Protocol Manual page verifier tooling (`scripts/verify_manual_pages.py` & `prodstud verify-manual`).
-- [x] Controlled live Google smoke test harness (`scripts/live_google_smoke_test.py`) and Designer Brain UX acceptance audit (`docs/UX_ACCEPTANCE_REPORT.md`).
+- [x] Optional multimodal Vision QC (`POST /api/assets/{id}/review/vision/quote` & `/run`, explicitly gated behind `$0.00` Spend Guard + confirmation with honest coverage/limitations, isolated inside `providers/google_vision_qc.py`), controlled 13-case Vision QC evaluation audit (`scripts/audit_vision_qc.py`, `docs/VISION_QC_EVALUATION_AUDIT.md`), and deterministic 170-Protocol Manual page verifier tooling (`scripts/verify_manual_pages.py` & `prodstud verify-manual`).
+- [x] Controlled live Google smoke test harness (`scripts/live_google_smoke_test.py`), Designer Brain UX acceptance audit (`docs/UX_ACCEPTANCE_REPORT.md`), and PR #1 Pre-Merge Security & Release Baseline (`docs/RELEASE_CHECKLIST.md`).
 - [ ] **External Blocker (`P2-7`):** Execute live Google smoke test (1 image + 1 video) once owner supplies `GEMINI_API_KEY` and explicit spend authorization (`docs/LIVE_PROVIDER_VERIFICATION.md`).
 - [ ] **External Blocker (`P2-8`):** Run `scripts/verify_manual_pages.py --source <manual.pdf> --update-registry` once owner supplies the original 170-Protocol Manual PDF.
 

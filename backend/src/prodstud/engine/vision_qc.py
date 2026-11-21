@@ -1,24 +1,23 @@
-"""Optional Multimodal Vision QC Engine (Phase 2 — Explicitly Gated, Honest Coverage & Limitations).
+"""Provider-Independent Optional Multimodal Vision QC Engine (Phase 2).
 
-Combines deterministic media forensics (Pillow / ffprobe) with optional Google Gemini multimodal visual
-inspection when explicitly quoted, approved, and within the user's Spend Guard cap.
+Combines deterministic media forensics (Pillow / ffprobe) with an injected provider-neutral VisionQCTransport
+when explicitly quoted, approved, and within the user's Spend Guard cap.
 
+Maintains strict engine/provider independence (zero imports from prodstud.providers).
 Never fabricates confidence or claims objective quality certification.
 """
 
 from __future__ import annotations
 
-import base64
 import json
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Protocol
 from uuid import uuid4
 
-import httpx
-
-from prodstud.domain.enums import ErrorCategory, MediaType, QualityVerdict
+from prodstud.domain.enums import MediaType, QualityVerdict
 from prodstud.domain.models import (
     GeneratedAssetRecord,
     ProductionPlanRecord,
@@ -26,9 +25,7 @@ from prodstud.domain.models import (
     QualityFinding,
     QualityReviewRecord,
 )
-from prodstud.engine.quality_reviewer import KEY_AI_TELLS, review_asset
-from prodstud.providers.base import ProviderAdapterError, ReferencePayload, build_http_client
-from prodstud.security import redact_secrets
+from prodstud.engine.quality_reviewer import review_asset
 from prodstud.storage.asset_store import probe_video_metadata
 from prodstud.storage.database import utcnow_iso
 
@@ -36,6 +33,41 @@ DEFAULT_VISION_QC_PROVIDER = "google_gemini_image"
 DEFAULT_VISION_QC_MODEL = "gemini-3.5-flash-lite"
 ESTIMATED_VISION_QC_SINGLE_USD = 0.0020
 ESTIMATED_VISION_QC_COMPARE_USD = 0.0035
+
+
+@dataclass(frozen=True)
+class VisionImageInput:
+    """Provider-neutral image payload passed into a VisionQCTransport."""
+
+    label: str
+    mime_type: str
+    data: bytes
+
+
+@dataclass(frozen=True)
+class VisionQCResponse:
+    """Provider-neutral structured text + token telemetry returned by a VisionQCTransport."""
+
+    raw_text: str
+    model_id: str
+    reported_cost_usd: float | None = None
+    prompt_tokens: int = 0
+    output_tokens: int = 0
+
+
+class VisionQCTransport(Protocol):
+    """Abstract transport implemented inside providers/ to keep engine/ strictly provider-independent."""
+
+    model_id: str
+
+    def inspect_images(
+        self,
+        *,
+        prompt: str,
+        images: list[VisionImageInput],
+        api_key: str,
+    ) -> VisionQCResponse:
+        ...
 
 
 def _extract_video_keyframe_bytes(video_path: Path, duration_s: float) -> list[tuple[float, bytes]]:
@@ -144,26 +176,22 @@ def _clamp_score(val: Any) -> float | None:
 
 
 class VisionQCService:
-    """Executes optional multimodal Vision QC via verified Gemini generateContent API with honest coverage disclosures."""
+    """Provider-independent multimodal Vision QC orchestrator delegating HTTP calls to an injected transport."""
 
     def __init__(
         self,
         *,
-        base_url: str = "https://generativelanguage.googleapis.com/v1beta",
-        model_id: str = DEFAULT_VISION_QC_MODEL,
-        timeout_seconds: float = 60.0,
-        http_client_factory: Callable[[float], httpx.Client] = build_http_client,
+        transport: VisionQCTransport | None = None,
+        model_id: str | None = None,
     ):
-        self.base_url = base_url.rstrip("/")
-        self.model_id = model_id
-        self.timeout_seconds = timeout_seconds
-        self.http_client_factory = http_client_factory
+        self.transport = transport
+        self.model_id = model_id or (transport.model_id if transport is not None else DEFAULT_VISION_QC_MODEL)
 
     def estimate_review(
         self,
         *,
         asset: GeneratedAssetRecord,
-        references: list[ReferencePayload],
+        references: list[Any],
     ) -> tuple[int, bool, float, str]:
         """Return (frames_to_inspect, includes_source_comparison, estimated_cost_usd, pricing_disclosure)."""
         if asset.media_type == MediaType.IMAGE:
@@ -187,18 +215,15 @@ class VisionQCService:
         asset: GeneratedAssetRecord,
         plan: ProductionPlanRecord,
         file_path: Path,
-        references: list[ReferencePayload],
+        references: list[Any],
         api_key: str,
     ) -> tuple[QualityReviewRecord, float]:
-        """Run deterministic forensics + approved multimodal Gemini vision check and merge honestly."""
-        if not api_key or len(api_key.strip()) < 10:
-            raise ProviderAdapterError(
-                "Active Google Gemini API key is required for optional multimodal Vision QC.",
-                category=ErrorCategory.PROVIDER_AUTH,
-            )
+        """Run deterministic forensics + approved multimodal vision check via injected transport and merge honestly."""
+        if self.transport is None:
+            raise RuntimeError("No VisionQCTransport configured for multimodal Vision QC.")
 
         base_review = review_asset(asset=asset, plan=plan, file_path=file_path)
-        parts: list[dict[str, Any]] = []
+        images: list[VisionImageInput] = []
         sampled_timestamps: list[float] = []
         includes_source_comparison = False
 
@@ -211,35 +236,27 @@ class VisionQCService:
                 sampled_timestamps=[],
                 includes_source_comparison=includes_source_comparison,
             )
-            parts.append({"text": prompt})
-            parts.append({"text": "GENERATED ASSET TO INSPECT:"})
-            parts.append(
-                {
-                    "inlineData": {
-                        "mimeType": asset.mime_type or "image/png",
-                        "data": base64.b64encode(img_bytes).decode("ascii"),
-                    }
-                }
+            images.append(
+                VisionImageInput(
+                    label="GENERATED ASSET TO INSPECT:",
+                    mime_type=asset.mime_type or "image/png",
+                    data=img_bytes,
+                )
             )
             for ref in references[:2]:
-                parts.append({"text": f"SOURCE REFERENCE ({ref.role}, {ref.filename}):"})
-                parts.append(
-                    {
-                        "inlineData": {
-                            "mimeType": ref.mime_type or "image/png",
-                            "data": base64.b64encode(ref.data).decode("ascii"),
-                        }
-                    }
+                images.append(
+                    VisionImageInput(
+                        label=f"SOURCE REFERENCE ({ref.role}, {ref.filename}):",
+                        mime_type=ref.mime_type or "image/png",
+                        data=ref.data,
+                    )
                 )
         else:
             probe = probe_video_metadata(file_path)
             dur = float(probe.get("duration_s") or asset.duration_s or 4.0)
             frames = _extract_video_keyframe_bytes(file_path, dur)
             if not frames:
-                raise ProviderAdapterError(
-                    "Unable to extract sampled video keyframes via ffmpeg for multimodal Vision QC.",
-                    category=ErrorCategory.INTERNAL,
-                )
+                raise RuntimeError("Unable to extract sampled video keyframes via ffmpeg for multimodal Vision QC.")
             sampled_timestamps = [ts for ts, _ in frames]
             prompt = _build_vision_qc_prompt(
                 asset=asset,
@@ -247,81 +264,21 @@ class VisionQCService:
                 sampled_timestamps=sampled_timestamps,
                 includes_source_comparison=False,
             )
-            parts.append({"text": prompt})
             for ts, fbytes in frames:
-                parts.append({"text": f"SAMPLED VIDEO KEYFRAME AT {ts:.2f}s:"})
-                parts.append(
-                    {
-                        "inlineData": {
-                            "mimeType": "image/png",
-                            "data": base64.b64encode(fbytes).decode("ascii"),
-                        }
-                    }
+                images.append(
+                    VisionImageInput(
+                        label=f"SAMPLED VIDEO KEYFRAME AT {ts:.2f}s:",
+                        mime_type="image/png",
+                        data=fbytes,
+                    )
                 )
 
-        body = {
-            "contents": [{"role": "user", "parts": parts}],
-            "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json"},
-        }
+        response = self.transport.inspect_images(prompt=prompt, images=images, api_key=api_key)
+        parsed = _extract_json_block(response.raw_text)
+        active_model = response.model_id or self.model_id
 
-        try:
-            with self.http_client_factory(self.timeout_seconds) as client:
-                resp = client.post(
-                    f"{self.base_url}/models/{self.model_id}:generateContent",
-                    headers={
-                        "x-goog-api-key": api_key.strip(),
-                        "Content-Type": "application/json",
-                    },
-                    json=body,
-                )
-        except httpx.TimeoutException as exc:
-            raise ProviderAdapterError(
-                "Multimodal Vision QC request timed out. Status is UNKNOWN; do not blindly resubmit.",
-                category=ErrorCategory.TIMEOUT_UNKNOWN,
-                provider_may_have_accepted=True,
-            ) from exc
-        except httpx.RequestError as exc:
-            raise ProviderAdapterError(
-                f"Network error contacting Google Gemini Vision QC: {redact_secrets(str(exc))}",
-                category=ErrorCategory.NETWORK,
-            ) from exc
-
-        if resp.status_code in {401, 403}:
-            raise ProviderAdapterError(
-                f"Google API rejected Vision QC request (HTTP {resp.status_code}).",
-                category=ErrorCategory.PROVIDER_AUTH,
-            )
-        if resp.status_code == 429:
-            raise ProviderAdapterError(
-                "Google API quota/rate limit exceeded during Vision QC (HTTP 429).",
-                category=ErrorCategory.QUOTA,
-            )
-        if resp.status_code >= 400:
-            raise ProviderAdapterError(
-                f"Google Gemini Vision QC rejected request (HTTP {resp.status_code}): {redact_secrets(resp.text[:400])}",
-                category=ErrorCategory.PROVIDER_REJECTED,
-            )
-
-        payload = resp.json()
-        raw_text = ""
-        for cand in payload.get("candidates") or []:
-            for part in (cand.get("content") or {}).get("parts") or []:
-                if isinstance(part, dict) and part.get("text"):
-                    raw_text += str(part["text"])
-        try:
-            parsed = _extract_json_block(raw_text)
-        except Exception as exc:
-            raise ProviderAdapterError(
-                f"Multimodal Vision QC returned unparseable JSON response: {redact_secrets(str(exc))}",
-                category=ErrorCategory.PROVIDER_REJECTED,
-            ) from exc
-
-        # Estimate actual token cost if usageMetadata present
-        usage = payload.get("usageMetadata") or {}
-        in_tok = int(usage.get("promptTokenCount") or 0)
-        out_tok = int(usage.get("candidatesTokenCount") or 0)
-        if in_tok > 0 or out_tok > 0:
-            reported_cost = round((in_tok / 1_000_000) * 0.30 + (out_tok / 1_000_000) * 2.50, 6)
+        if response.reported_cost_usd is not None:
+            reported_cost = response.reported_cost_usd
         else:
             _, _, reported_cost, _ = self.estimate_review(asset=asset, references=references)
 
@@ -335,7 +292,6 @@ class VisionQCService:
             phys_score = _clamp_score(parsed.get("physical_causality_score"))
             pres_score = _clamp_score(parsed.get("preservation_score")) if includes_source_comparison else None
 
-            # Replace uninspected semantic placeholder with real multimodal dimensions
             dimensions = [d for d in dimensions if d.name != "semantic_preservation_and_causality"]
             if brief_score is not None:
                 dimensions.append(
@@ -346,7 +302,7 @@ class VisionQCService:
                         score=brief_score,
                         critical=True,
                         observed_evidence=str(parsed.get("brief_adherence_evidence") or "Evaluated via multimodal vision."),
-                        inferred_notes=f"Advisory multimodal evaluation ({self.model_id}).",
+                        inferred_notes=f"Advisory multimodal evaluation ({active_model}).",
                     )
                 )
             if phys_score is not None:
@@ -358,7 +314,7 @@ class VisionQCService:
                         score=phys_score,
                         critical=False,
                         observed_evidence=str(parsed.get("physical_causality_evidence") or "Evaluated via multimodal vision."),
-                        inferred_notes=f"Advisory multimodal evaluation ({self.model_id}).",
+                        inferred_notes=f"Advisory multimodal evaluation ({active_model}).",
                     )
                 )
             if includes_source_comparison and pres_score is not None:
@@ -374,7 +330,6 @@ class VisionQCService:
                     )
                 )
 
-            # Update AI Tells checklist from multimodal observations
             tell_map = {
                 str(item.get("id")): item
                 for item in (parsed.get("detected_ai_tells") or [])
@@ -389,11 +344,11 @@ class VisionQCService:
                         tell["evidence"] = str(obs["evidence"])
 
             coverage = (
-                f"deterministic_pixel_forensics_plus_multimodal_vision ({self.model_id}; "
+                f"deterministic_pixel_forensics_plus_multimodal_vision ({active_model}; "
                 f"source_reference_comparison={'yes' if includes_source_comparison else 'no'})"
             )
             limitations = [
-                f"Combines deterministic Pillow pixel forensics with advisory multimodal visual inspection ({self.model_id}).",
+                f"Combines deterministic Pillow pixel forensics with advisory multimodal visual inspection ({active_model}).",
                 "Vision models can miss subtle anatomical anomalies, micro-text typos, or exact brand color deltas — final human approval remains required.",
                 "This evaluation is strictly advisory and is NOT an objective quality certification.",
             ]
@@ -411,7 +366,7 @@ class VisionQCService:
                         score=brief_score,
                         critical=True,
                         observed_evidence=str(parsed.get("brief_adherence_evidence") or "Evaluated across sampled video frames."),
-                        inferred_notes=f"Evaluated on {len(sampled_timestamps)} sampled frames ONLY ({self.model_id}).",
+                        inferred_notes=f"Evaluated on {len(sampled_timestamps)} sampled frames ONLY ({active_model}).",
                     )
                 )
             if cont_score is not None:
@@ -428,7 +383,7 @@ class VisionQCService:
                 )
             coverage = (
                 f"ffprobe_stream_metadata_plus_{len(sampled_timestamps)}_sampled_frames_multimodal_vision "
-                f"({self.model_id}) — NOT full frame-by-frame playback"
+                f"({active_model}) — NOT full frame-by-frame playback"
             )
             limitations = [
                 f"Multimodal video inspection examined ONLY {len(sampled_timestamps)} sampled keyframes ({', '.join(f'{t:.2f}s' for t in sampled_timestamps)}) — NOT full frame-by-frame motion playback.",
@@ -437,7 +392,6 @@ class VisionQCService:
             ]
             confidence = 0.71
 
-        # Add multimodal findings cleanly
         for fitem in parsed.get("findings") or []:
             if not isinstance(fitem, dict):
                 continue
@@ -456,7 +410,6 @@ class VisionQCService:
                 )
             )
 
-        # Normalize dimension weights visibly
         total_w = sum(d.weight for d in dimensions if d.weight > 0)
         if total_w > 0:
             for d in dimensions:

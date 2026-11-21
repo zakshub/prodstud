@@ -135,7 +135,13 @@ async def upload_reference(
     project = rt.repo.get_project(user.id, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
-    raw_bytes = await file.read()
+    max_bytes = rt.settings.max_reference_bytes
+    raw_bytes = await file.read(max_bytes + 1)
+    if len(raw_bytes) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Reference image exceeds max upload size of {max_bytes // (1024 * 1024)} MB.",
+        )
     try:
         stored = rt.store.store_reference_image(raw_bytes, declared_mime=file.content_type)
     except MediaValidationError as exc:

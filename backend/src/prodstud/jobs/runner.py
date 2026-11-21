@@ -22,6 +22,7 @@ from prodstud.domain.models import (
 from prodstud.engine.quality_reviewer import review_asset
 from prodstud.engine.vision_qc import DEFAULT_VISION_QC_PROVIDER, VisionQCService
 from prodstud.providers.base import ProviderAdapterError, ReferencePayload
+from prodstud.providers.google_vision_qc import GoogleVisionQCAdapter
 from prodstud.providers.policy_gate import PolicyEvaluationGate
 from prodstud.providers.registry import ProviderRegistry
 from prodstud.security import SecretVault, redact_secrets
@@ -55,7 +56,7 @@ class JobService:
         self.vault = vault
         self.providers = providers
         self.policy_gate = policy_gate
-        self.vision_qc = vision_qc or VisionQCService()
+        self.vision_qc = vision_qc or VisionQCService(transport=GoogleVisionQCAdapter())
 
     def _load_references(self, user_id: str, plan: ProductionPlanRecord) -> list[ReferencePayload]:
         brief_payload = self.repo.get_brief_payload(user_id, plan.brief_id) or {}
@@ -188,9 +189,10 @@ class JobService:
         val_errors = adapter.validate_request(plan, cap.model_id, refs)
         api_key = self._decrypt_api_key(user.id, cap.provider_id) if cap.requires_credential else None
 
-        # Fail-closed Policy & SpendGuard check across full variation_count total cost
+        # Fresh user spend snapshot + Fail-closed Policy & SpendGuard check
+        fresh_user = self.repo.get_user_profile(user.id) or user
         self.policy_gate.verify_before_submit(
-            user=user,
+            user=fresh_user,
             plan=plan,
             capability=cap,
             quote=quote,
@@ -201,8 +203,12 @@ class JobService:
             validation_errors=val_errors,
         )
 
-        # Mark quote consumed & plan approved BEFORE any provider invocation
-        self.repo.mark_quote_consumed(quote_id)
+        # Atomic compare-and-swap quote consumption closes concurrent replay race before any provider call
+        if not self.repo.consume_quote_atomically(user.id, quote_id):
+            raise ProviderAdapterError(
+                "Approval quote has already been consumed. Request a fresh approval quote to prevent duplicate submissions.",
+                category=ErrorCategory.APPROVAL_REQUIRED,
+            )
         plan.approved_for_generation = True
         self.repo.update_plan(user.id, plan)
 
@@ -353,9 +359,17 @@ class JobService:
         project_id: str,
         item_specs: list[dict[str, Any]],
     ) -> list[tuple[ProductionPlanRecord, Any, int, bool, list[str], list[ReferencePayload]]]:
+        seen_plans: set[str] = set()
+        total_outputs = 0
         evaluated = []
         for spec in item_specs:
             plan_id = str(spec["plan_id"])
+            if plan_id in seen_plans:
+                raise ProviderAdapterError(
+                    f"Duplicate plan '{plan_id}' in batch request; adjust variation_count instead of repeating plan IDs.",
+                    category=ErrorCategory.VALIDATION,
+                )
+            seen_plans.add(plan_id)
             plan = self.repo.get_plan(user.id, plan_id)
             if not plan or plan.project_id != project_id:
                 raise ProviderAdapterError(
@@ -378,6 +392,12 @@ class JobService:
             cred_row = self.repo.get_credential_row(user.id, key_slot)
             has_cred = bool(cred_row and cred_row["status"] == "active" and cred_row["encrypted_key"])
             count = 1 if plan.media_type == MediaType.VIDEO else max(1, min(4, int(spec.get("variation_count", 1))))
+            total_outputs += count
+            if total_outputs > 24:
+                raise ProviderAdapterError(
+                    "Batch exceeds maximum safe ceiling of 24 total outputs per approved batch.",
+                    category=ErrorCategory.VALIDATION,
+                )
             evaluated.append((plan, cap, count, has_cred, val_errors, refs))
         return evaluated
 
@@ -452,8 +472,12 @@ class JobService:
             evaluated_items=evaluated_gate,
         )
 
-        # Mark batch quote consumed and persist batch intent BEFORE any provider call
-        self.repo.mark_batch_quote_consumed(batch_quote_id)
+        # Atomic compare-and-swap batch quote consumption closes concurrent replay race
+        if not self.repo.consume_batch_quote_atomically(user.id, batch_quote_id):
+            raise ProviderAdapterError(
+                "Batch approval quote has already been consumed. Request a fresh batch quote.",
+                category=ErrorCategory.APPROVAL_REQUIRED,
+            )
         now = utcnow_iso()
         batch = BatchExecutionRecord(
             batch_id=f"bat_{uuid4().hex[:14]}",
@@ -673,18 +697,41 @@ class JobService:
             quote_consumed=bool(qrow["consumed"]),
             has_active_credential=bool(api_key),
         )
-        self.repo.mark_vision_quote_consumed(quote_id)
+        if not self.repo.consume_vision_quote_atomically(user.id, quote_id):
+            raise ProviderAdapterError(
+                "Vision QC quote has already been consumed. Request a fresh quote.",
+                category=ErrorCategory.APPROVAL_REQUIRED,
+            )
 
         refs = self._load_references(user.id, plan)
         file_path = self.store.resolve(asset_row["storage_relpath"])
         assert api_key is not None
-        review, reported_cost = self.vision_qc.run_multimodal_review(
-            asset=asset,
-            plan=plan,
-            file_path=file_path,
-            references=refs,
-            api_key=api_key,
-        )
+        try:
+            review, reported_cost = self.vision_qc.run_multimodal_review(
+                asset=asset,
+                plan=plan,
+                file_path=file_path,
+                references=refs,
+                api_key=api_key,
+            )
+        except ProviderAdapterError as exc:
+            if exc.provider_may_have_accepted:
+                # Conservatively reserve estimated Vision QC cost if timeout left acceptance uncertain
+                self.repo.record_spend(
+                    user_id=user.id,
+                    job_id=f"vqc_unknown_{quote_id}",
+                    provider_id=quote.provider_id,
+                    model_id=quote.model_id,
+                    estimated_cost_usd=quote.estimated_cost_usd,
+                    reported_cost_usd=quote.estimated_cost_usd,
+                )
+            raise
+        except (ValueError, RuntimeError) as exc:
+            raise ProviderAdapterError(
+                f"Multimodal Vision QC failed processing response: {redact_secrets(str(exc))}",
+                category=ErrorCategory.PROVIDER_REJECTED,
+            ) from exc
+
         self.repo.save_quality_review(user.id, review)
         self.repo.record_spend(
             user_id=user.id,
@@ -786,6 +833,17 @@ class JobService:
                 error_message=str(exc),
                 provider_may_have_accepted=exc.provider_may_have_accepted,
             )
+            # Conservatively reserve estimated spend when a billable request enters UNKNOWN so cap cannot be overspent
+            if next_status == JobStatus.UNKNOWN and job.is_billable:
+                reserved = float(job.estimated_cost_usd) if job.estimated_cost_usd is not None else 0.01
+                self.repo.record_spend(
+                    user_id=user_id,
+                    job_id=job.id,
+                    provider_id=job.provider_id,
+                    model_id=job.model_id,
+                    estimated_cost_usd=reserved,
+                    reported_cost_usd=reserved,
+                )
             self.repo.record_audit(
                 user_id=user_id,
                 project_id=plan.project_id,

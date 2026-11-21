@@ -195,10 +195,15 @@ class Repository:
             if not row:
                 return None
             if row["expires_at"] <= utcnow_iso():
+                conn.close()
+                self.delete_session(token_hash)
                 return None
             return str(row["user_id"])
         finally:
-            conn.close()
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def delete_session(self, token_hash: str) -> None:
         with self.db.transaction() as conn:
@@ -311,23 +316,36 @@ class Repository:
         estimated_cost_usd: float,
         reported_cost_usd: float,
     ) -> None:
+        """Idempotently record or update spend telemetry per (user_id, job_id) to prevent double counting."""
+        est = round(float(estimated_cost_usd), 6)
+        rep = round(float(reported_cost_usd), 6)
         with self.db.transaction() as conn:
-            conn.execute(
-                """INSERT INTO spend_telemetry
-                   (id, user_id, job_id, provider_id, model_id, estimated_cost_usd, reported_cost_usd, recorded_day, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    _new_id("spd"),
-                    user_id,
-                    job_id,
-                    provider_id,
-                    model_id,
-                    round(float(estimated_cost_usd), 6),
-                    round(float(reported_cost_usd), 6),
-                    utc_day_str(),
-                    utcnow_iso(),
-                ),
-            )
+            existing = conn.execute(
+                "SELECT id FROM spend_telemetry WHERE user_id = ? AND job_id = ?",
+                (user_id, job_id),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE spend_telemetry SET estimated_cost_usd = ?, reported_cost_usd = ? WHERE id = ?",
+                    (est, rep, existing["id"]),
+                )
+            else:
+                conn.execute(
+                    """INSERT INTO spend_telemetry
+                       (id, user_id, job_id, provider_id, model_id, estimated_cost_usd, reported_cost_usd, recorded_day, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        _new_id("spd"),
+                        user_id,
+                        job_id,
+                        provider_id,
+                        model_id,
+                        est,
+                        rep,
+                        utc_day_str(),
+                        utcnow_iso(),
+                    ),
+                )
 
     # ── Projects ───────────────────────────────────────────────────────────
     def create_project(self, user_id: str, name: str, description: str = "") -> ProjectRecord:
@@ -664,6 +682,15 @@ class Repository:
             return dict(row) if row else None
         finally:
             conn.close()
+
+    def consume_quote_atomically(self, user_id: str, quote_id: str) -> bool:
+        """Atomically mark quote consumed iff currently unconsumed (prevents concurrent replay races)."""
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE approval_quotes SET consumed = 1 WHERE quote_id = ? AND user_id = ? AND consumed = 0",
+                (quote_id, user_id),
+            )
+            return cur.rowcount == 1
 
     def mark_quote_consumed(self, quote_id: str) -> None:
         with self.db.transaction() as conn:
@@ -1214,6 +1241,15 @@ class Repository:
         finally:
             conn.close()
 
+    def consume_batch_quote_atomically(self, user_id: str, batch_quote_id: str) -> bool:
+        """Atomically mark batch quote consumed iff currently unconsumed."""
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE batch_quotes SET consumed = 1 WHERE batch_quote_id = ? AND user_id = ? AND consumed = 0",
+                (batch_quote_id, user_id),
+            )
+            return cur.rowcount == 1
+
     def mark_batch_quote_consumed(self, batch_quote_id: str) -> None:
         with self.db.transaction() as conn:
             conn.execute("UPDATE batch_quotes SET consumed = 1 WHERE batch_quote_id = ?", (batch_quote_id,))
@@ -1300,6 +1336,15 @@ class Repository:
             return dict(row) if row else None
         finally:
             conn.close()
+
+    def consume_vision_quote_atomically(self, user_id: str, quote_id: str) -> bool:
+        """Atomically mark vision QC quote consumed iff currently unconsumed."""
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE vision_qc_quotes SET consumed = 1 WHERE quote_id = ? AND user_id = ? AND consumed = 0",
+                (quote_id, user_id),
+            )
+            return cur.rowcount == 1
 
     def mark_vision_quote_consumed(self, quote_id: str) -> None:
         with self.db.transaction() as conn:

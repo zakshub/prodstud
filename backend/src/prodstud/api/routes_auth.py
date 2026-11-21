@@ -44,6 +44,9 @@ class CredentialUpsertPayload(BaseModel):
     api_key: str = Field(..., min_length=8, max_length=512)
 
 
+_DUMMY_PASSWORD_HASH = hash_password("DummyTimingProtection!2026")
+
+
 @router.post("/api/auth/register")
 def register(
     payload: RegisterPayload,
@@ -84,7 +87,7 @@ def register(
         secure=rt.settings.is_production,
         max_age=72 * 3600,
     )
-    return {"user": user.model_dump(), "token": raw_token}
+    return {"user": user.model_dump()}
 
 
 @router.post("/api/auth/login")
@@ -94,7 +97,10 @@ def login(
     rt: AppRuntime = Depends(get_runtime),
 ) -> dict:
     row = rt.repo.get_user_row_by_email(payload.email)
-    if not row or not verify_password(payload.password, row["password_hash"]):
+    if not row:
+        verify_password(payload.password, _DUMMY_PASSWORD_HASH)
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    if not verify_password(payload.password, row["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password.")
 
     raw_token = generate_session_token()
@@ -117,7 +123,7 @@ def login(
         secure=rt.settings.is_production,
         max_age=72 * 3600,
     )
-    return {"user": user.model_dump(), "token": raw_token}
+    return {"user": user.model_dump()}
 
 
 @router.post("/api/auth/logout")

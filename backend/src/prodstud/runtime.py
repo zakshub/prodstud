@@ -10,6 +10,7 @@ from prodstud.engine.orchestrator import ProductionIntelligenceEngine
 from prodstud.engine.protocol_registry import ProtocolRegistry
 from prodstud.engine.vision_qc import VisionQCService
 from prodstud.jobs.runner import JobService
+from prodstud.providers.google_vision_qc import GoogleVisionQCAdapter
 from prodstud.providers.policy_gate import PolicyEvaluationGate
 from prodstud.providers.registry import ProviderRegistry
 from prodstud.security import ApprovalSigner, SecretRedactingFilter, SecretVault
@@ -52,7 +53,7 @@ class AppRuntime:
         engine = ProductionIntelligenceEngine(protocols)
         providers = ProviderRegistry(enable_local_fixture=cfg.enable_local_fixture)
         policy_gate = PolicyEvaluationGate(signer)
-        vision_qc = VisionQCService()
+        vision_qc = VisionQCService(transport=GoogleVisionQCAdapter())
         jobs = JobService(
             repo=repo,
             store=store,

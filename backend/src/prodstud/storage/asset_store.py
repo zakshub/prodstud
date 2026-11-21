@@ -13,6 +13,11 @@ from typing import Any
 
 from PIL import Image
 
+from prodstud.security import sanitize_download_filename
+
+MAX_REFERENCE_PIXELS = 25_000_000  # 25 MP ceiling prevents Pillow decompression bomb memory exhaustion
+Image.MAX_IMAGE_PIXELS = MAX_REFERENCE_PIXELS
+
 ALLOWED_REFERENCE_MIMES = {
     "image/png": ".png",
     "image/jpeg": ".jpg",
@@ -113,8 +118,13 @@ class AssetStore:
             with Image.open(io.BytesIO(data)) as img:
                 fmt = (img.format or "").upper()
                 width, height = img.size
+        except Image.DecompressionBombError as exc:
+            raise MediaValidationError("Uploaded image exceeds safe pixel ceiling (25 MP maximum).") from exc
         except Exception as exc:
             raise MediaValidationError("Uploaded file is not a valid PNG, JPEG, or WebP image.") from exc
+
+        if width * height > MAX_REFERENCE_PIXELS:
+            raise MediaValidationError("Uploaded image exceeds safe pixel ceiling (25 MP maximum).")
 
         fmt_to_mime = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}
         actual_mime = fmt_to_mime.get(fmt)
@@ -189,7 +199,7 @@ class AssetStore:
 
     def resolve(self, relpath: str) -> Path:
         candidate = (self.base_dir / relpath).resolve()
-        if not str(candidate).startswith(str(self.base_dir)):
+        if not candidate.is_relative_to(self.base_dir):
             raise MediaValidationError("Path traversal blocked.")
         if not candidate.exists():
             raise FileNotFoundError(f"Asset file not found: {relpath}")
@@ -199,13 +209,19 @@ class AssetStore:
         return self.resolve(relpath).read_bytes()
 
     def build_export_zip(self, items: list[tuple[str, str, dict[str, Any]]]) -> bytes:
-        """Package media files + sanitized provenance JSON sidecars into an in-memory ZIP archive."""
+        """Package media files + sanitized provenance JSON sidecars into an in-memory ZIP archive (Zip-Slip safe)."""
         buf = io.BytesIO()
+        used_names: set[str] = set()
         with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for relpath, export_filename, sidecar in items:
+            for idx, (relpath, export_filename, sidecar) in enumerate(items, start=1):
+                safe_name = sanitize_download_filename(export_filename, fallback=f"asset_{idx}.bin")
+                if safe_name in used_names:
+                    stem, dot, ext = safe_name.rpartition(".")
+                    safe_name = f"{stem}_{idx}.{ext}" if dot else f"{safe_name}_{idx}"
+                used_names.add(safe_name)
                 media_bytes = self.read_bytes(relpath)
-                zf.writestr(export_filename, media_bytes)
-                sidecar_name = f"{Path(export_filename).stem}.provenance.json"
+                zf.writestr(safe_name, media_bytes)
+                sidecar_name = f"{Path(safe_name).stem}.provenance.json"
                 zf.writestr(
                     sidecar_name,
                     json.dumps(sidecar, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
