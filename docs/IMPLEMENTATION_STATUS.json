@@ -1,0 +1,104 @@
+{
+  "updated_at": "2026-11-21",
+  "overall_verified_pct": 44.2,
+  "verification_evidence": {
+    "mvp_local_status": "verified_ready_for_merge",
+    "backend_pytest": "40/40 passed",
+    "frontend_typecheck_and_build": "passed (tsc --noEmit + vite build)",
+    "browser_e2e_qa": "12/12 live Chromium MVP workflows passed (auth persistence, image+video planning/approval/generation/revision/export, 2x variations, batch approval, video extension, spend guard, idempotency keys, bulk ZIP export, dark/light responsive WCAG 2.2, 0 console/page errors)",
+    "vision_qc_controlled_audit": "13/13 synthetic cases audited at $0.00 spend (TP=5, TN=2, FP=3, FN=3)",
+    "live_provider_status": "NOT_LIVE_VERIFIED (contract-tested via mocked HTTP; blocked on owner GEMINI_API_KEY + explicit spend authorization)",
+    "external_blockers": ["P2-7", "P2-8"]
+  },
+  "phases": [
+    {
+      "id": "phase_0",
+      "name": "Phase 0: Discovery and product validation",
+      "status": "verified",
+      "verified_pct": 100.0,
+      "tasks": [
+        { "id": "P0-1", "title": "Repository audit & stack decision (D010)", "weight": 2, "status": "verified" },
+        { "id": "P0-2", "title": "Studio Brain & Designer Brain integration & contradiction audit", "weight": 2, "status": "verified" },
+        { "id": "P0-3", "title": "170-Protocol data-driven registry & coverage report", "weight": 2, "status": "verified" },
+        { "id": "P0-4", "title": "Verified Nov 2026 Google image/video capability matrix", "weight": 2, "status": "verified" },
+        { "id": "P0-5", "title": "Threat model, spend guard ($0.00 default), & Interface Evolution Roadmap", "weight": 2, "status": "verified" }
+      ]
+    },
+    {
+      "id": "phase_1",
+      "name": "Phase 1: MVP foundation (Level 1 CLI + Level 2 Web Workspace)",
+      "status": "verified",
+      "verified_pct": 100.0,
+      "tasks": [
+        { "id": "P1-1", "title": "Single-user auth (incl. server-side logout revocation & CSP), SQLite WAL + integrity checks + atomic snapshots", "weight": 3, "status": "verified" },
+        { "id": "P1-2", "title": "Server-side Fernet API key vault, log redaction, $0.00 spend guard", "weight": 3, "status": "verified" },
+        { "id": "P1-3", "title": "Projects CRUD, rename, archive/reopen, reference uploads with validation & sanitized downloads", "weight": 2, "status": "verified" },
+        { "id": "P1-4", "title": "Provider-independent Production Intelligence Engine (Image & Dedicated Video Shot Planner with edit/revision re-validation)", "weight": 4, "status": "verified" },
+        { "id": "P1-5", "title": "Google Image (Nano Banana 2.1) & Video (Omni 1.2 Flash) adapters (contract-tested via mocked HTTP) + local dev fixture", "weight": 4, "status": "verified" },
+        { "id": "P1-6", "title": "Explicit approval quote/modal, safe job states incl. unknown, zero blind retries", "weight": 3, "status": "verified" },
+        { "id": "P1-7", "title": "Advisory quality review (Pillow/FFprobe), targeted revision, asset preview & sanitized export", "weight": 3, "status": "verified" },
+        { "id": "P1-8", "title": "Level 1 CLI & Level 2 Asset-First Web Workspace (Dark & Light companion modes)", "weight": 3, "status": "verified" }
+      ]
+    },
+    {
+      "id": "phase_2",
+      "name": "Phase 2: Production Studio V1 (Level 3 Advanced Production Workspace)",
+      "status": "in_progress",
+      "verified_pct": 83.3,
+      "tasks": [
+        { "id": "P2-1", "title": "Full 170-protocol registry explorer & per-plan activation trace", "weight": 2, "status": "verified" },
+        { "id": "P2-2", "title": "Reusable production templates & reference role classification", "weight": 2, "status": "verified" },
+        { "id": "P2-3", "title": "Asset search, tags, collections, favorites, side-by-side version comparison & bulk ZIP export", "weight": 3, "status": "verified" },
+        { "id": "P2-4", "title": "Human QC review feedback & representative brief regression test suite", "weight": 3, "status": "verified" },
+        { "id": "P2-5", "title": "Multi-output image variations (1-4 + contact sheet), batch generation combined cost approval, & multi-turn video extension (3-10s, up to 30s)", "weight": 3, "status": "verified" },
+        { "id": "P2-6", "title": "Optional multimodal Vision QC (explicitly gated + mocked verification) & 170-Protocol Manual page verifier tooling", "weight": 2, "status": "verified" },
+        { "id": "P2-7", "title": "Controlled live Google Image + Video smoke test execution (awaiting owner GEMINI_API_KEY & explicit spend authorization)", "weight": 2, "status": "blocked_external" },
+        { "id": "P2-8", "title": "Original 170-Protocol Manual PDF page-by-page source audit (awaiting owner source PDF upload)", "weight": 1, "status": "blocked_external" }
+      ]
+    },
+    {
+      "id": "phase_3",
+      "name": "Phase 3: Advanced Creator and Professional Edition (Level 4)",
+      "status": "planned",
+      "verified_pct": 0.0,
+      "tasks": [
+        { "id": "P3-1", "title": "Reusable consistency profiles (subject/product/environment) & reference boards", "weight": 5, "status": "planned" },
+        { "id": "P3-2", "title": "Multi-provider adapters, model comparison, batch queue & budget alerts", "weight": 5, "status": "planned" },
+        { "id": "P3-3", "title": "Revision impact analysis, custom export presets & expiring client review links", "weight": 5, "status": "planned" }
+      ]
+    },
+    {
+      "id": "phase_4",
+      "name": "Phase 4: Team and Studio Edition (Level 5)",
+      "status": "planned",
+      "verified_pct": 0.0,
+      "tasks": [
+        { "id": "P4-1", "title": "Organizations, shared workspaces, roles (owner..viewer) & invitations", "weight": 5, "status": "planned" },
+        { "id": "P4-2", "title": "Asset annotations, plan comments, approval workflows & shared team libraries", "weight": 5, "status": "planned" },
+        { "id": "P4-3", "title": "Workspace provider allowlists, shared credentials, member budgets & shared queues", "weight": 5, "status": "planned" }
+      ]
+    },
+    {
+      "id": "phase_5",
+      "name": "Phase 5: Enterprise Edition (Level 6 Foundation)",
+      "status": "planned",
+      "verified_pct": 0.0,
+      "tasks": [
+        { "id": "P5-1", "title": "SAML/OIDC SSO, SCIM provisioning, custom RBAC & tenant isolation (PostgreSQL)", "weight": 5, "status": "planned" },
+        { "id": "P5-2", "title": "KMS/CMEK, retention/legal hold, brand policy enforcement & compliance evidence", "weight": 5, "status": "planned" },
+        { "id": "P5-3", "title": "Public REST API keys, webhooks, service accounts, DAM/cloud storage & DR", "weight": 5, "status": "planned" }
+      ]
+    },
+    {
+      "id": "phase_6",
+      "name": "Phase 6: Enterprise Scale and Platform Ecosystem (Level 6 Platform)",
+      "status": "planned",
+      "verified_pct": 0.0,
+      "tasks": [
+        { "id": "P6-1", "title": "Provider catalogue, custom adapters, versioned capability registry & SDKs", "weight": 5, "status": "planned" },
+        { "id": "P6-2", "title": "Workflow automation triggers, custom organization protocol packs & benchmarking", "weight": 5, "status": "planned" },
+        { "id": "P6-3", "title": "Dedicated tenant deployments & cross-project organization intelligence", "weight": 5, "status": "planned" }
+      ]
+    }
+  ]
+}
